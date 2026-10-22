@@ -1,0 +1,10 @@
+{% extends "contest_manage.html" %}
+{% block content %}
+{% if offlineJudgeUrl %}
+<div class="row"><div class="columns"><div class="section"><div class="section__body" style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+  <span><span class="icon icon-upload"></span> OI 离线赛代码评测</span>
+  <a class="primary rounded button" href="{{ offlineJudgeUrl }}">导入正式代码</a>
+</div></div></div></div>
+{% endif %}
+{{ super() }}
+{% endblock %}

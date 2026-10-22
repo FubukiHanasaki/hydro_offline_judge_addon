@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "noEmit": true,
+    "types": ["node"],
+    "paths": { "hydrooj": ["./src/hydro.d.ts"] },
+    "ignoreDeprecations": "6.0"
+  },
+  "include": ["index.ts", "src/**/*.ts"]
+}

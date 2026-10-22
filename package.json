@@ -1,0 +1,16 @@
+{
+  "name": "hydro-offline-judge",
+  "version": "0.1.0",
+  "description": "Hydro OI 离线赛代码包预览导入与自动评测",
+  "author": "FubukiHanasaki",
+  "license": "AGPL-3.0-or-later",
+  "main": "index.ts",
+  "engines": {"node": ">=22.18.0"},
+  "peerDependencies": {"hydrooj": "^5.0.7"},
+  "peerDependenciesMeta": {"hydrooj": {"optional": true}},
+  "dependencies": {"@zip.js/zip.js": "2.8.61", "csv-parse": "7.0.3", "mongodb": "^7.0.0"},
+  "devDependencies": {"@types/node": "^22.0.0", "typescript": "^6.0.0", "tsx": "^4.20.0"},
+  "scripts": {"check": "tsc --noEmit", "test:local": "TMPDIR=$PWD/.tmp node --import tsx --test .tmp/tests/*.test.ts"},
+  "files": ["index.ts", "src", "templates", "public", "docs", "README.md", "LICENSE"],
+  "hydro": {"cli": false}
+}
