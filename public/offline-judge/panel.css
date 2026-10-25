@@ -59,3 +59,6 @@
 #oj-ignored-files { margin: 12px 0; }
 #oj-ignored-files summary { cursor: pointer; }
 #oj-ignored-files ul { max-height: 180px; overflow: auto; overflow-wrap: anywhere; margin: 8px 0; padding-left: 24px; }
+
+.oj-file-choice { display:flex; align-items:center; gap:6px; margin-bottom:5px; white-space:nowrap; }
+.oj-file-choice input { margin:0; }

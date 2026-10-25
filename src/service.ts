@@ -2,9 +2,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { ObjectId, type Db } from 'mongodb';
 import { readArchive } from './archive';
-import { applyFolderMapping } from './folders';
+import { applyFolderMapping, matchesFolderFile } from './folders';
 import { applyUploadLanguage } from './languages';
-import { ImportError, LIMITS, type Contest, type Gateway, type Job, type Row } from './types';
+import { ImportError, LIMITS, type Contest, type Gateway, type Job, type Row, type InputRow } from './types';
 export const contestKey = (domain: string, id: string) => `${domain}:${id}`;
 export class ImportService {
   readonly jobs; readonly rows; readonly claims; readonly audit;
@@ -37,15 +37,23 @@ export class ImportService {
     if (await this.claims.findOne({ _id: contestKey(domain, id) })) throw new ImportError(409, '这场比赛已经确认过正式代码，只能在原批次查看或继续');
     if (await this.jobs.countDocuments({ actor, state: 'preview', createdAt: { $gt: new Date(Date.now() - LIMITS.previewMs) } }) >= 5) throw new ImportError(429, '最多保留 5 个有效预览，请先取消不需要的批次');
     const archive = await readArchive(bytes);
-    const input = applyUploadLanguage(applyFolderMapping(archive,contest,mapping),language);
+    return this.createPreview(actor, domain, contest, archive, archive.ignoredFiles, mapping, language);
+  }
+  private async createPreview(actor:number,domain:string,contest:Contest,source:InputRow[],ignoredFiles:string[],mapping?:unknown,language?:unknown,preserveLanguage=false) {
+    const id=contest.id;
+    const candidates=source.filter(matchesFolderFile);
+    if(!candidates.length)throw new ImportError(400,'未找到题目目录名与文件名完全一致的代码文件');
+    ignoredFiles=[...new Set([...ignoredFiles,...source.filter(r=>!matchesFolderFile(r)&&r.file).map(r=>r.file)])];
+    const mapped = applyFolderMapping(candidates,contest,mapping);
+    const input = preserveLanguage ? mapped : applyUploadLanguage(mapped,language);
     const resolved = await this.gateway.resolve(contest, input);
-    await this.gateway.participants?.(actor, domain, id, [...new Set(resolved.map(r=>r.uid).filter(uid=>uid>0))]);
+    await this.gateway.participants?.(actor, domain, id, [...new Set(resolved.filter(r=>!r.excluded).map(r => r.uid).filter(uid=>uid>0))]);
     const now = new Date(), job: Job = {
       _id: new ObjectId(), domainId: domain, contestId: id, title: contest.title, actor,
       fingerprint: contest.fingerprint,
-      digest: createHash('sha256').update(JSON.stringify(resolved.map(r => [r.uid, r.problem, r.file, r.language, r.hash]))).digest('hex'),
+      digest: createHash('sha256').update(JSON.stringify(resolved.map(r => [r.uid, r.problem, r.file, r.language, r.hash, !!r.excluded]))).digest('hex'),
       state: 'preview', revision: 1, count: resolved.length, createdAt: now, updatedAt: now,
-      expiresAt: new Date(now.getTime() + LIMITS.previewMs), error: '', ignoredFiles: archive.ignoredFiles,
+      expiresAt: new Date(now.getTime() + LIMITS.previewMs), error: '', ignoredFiles,
     };
     await this.rows.insertMany(resolved.map((r, i) => ({ ...r, _id: `${job._id}:${i}`, jobId: job._id, domainId: domain, contestId: id, state: 'pending' as const })));
     try { await this.jobs.insertOne(job); } catch (e) { await this.rows.deleteMany({ jobId: job._id }); throw e; }
@@ -60,20 +68,37 @@ export class ImportService {
   }
   async view(actor: number, domain: string, id: string) {
     const job = await this.job(actor, domain, id);
-    const rows = await this.rows.find({ jobId: job._id }).sort({ line: 1 }).toArray();
+    const stored = await this.rows.find({ jobId: job._id }).sort({ line: 1 }).toArray();
+    const needsMatch=job.state==='preview'&&stored.some(r=>!matchesFolderFile(r));
+    const rows=job.state==='preview'?stored.filter(matchesFolderFile):stored;
+    const ignoredFiles=[...new Set([...(job.ignoredFiles??[]),...(needsMatch?stored.filter(r=>!matchesFolderFile(r)&&r.file).map(r=>r.file):[])])];
     const output = [];
     for (const r of rows) {
       const result = r.pid && r.state !== 'pending' ? await this.gateway.result(job, r) : null;
-      output.push({ contestantName:r.contestantName,problemFolder:r.problemFolder,line: r.line, uid: r.uid, username: r.username, problem: r.problem, pid: r.pid, file: r.file, language: r.language, bytes: Buffer.byteLength(r.code), hash: r.hash, errors: r.errors, state: r.state, rid: r.pid && r.state !== 'pending' ? String(r.rid) : null, result });
+      output.push({ excluded:!!r.excluded, contestantName:r.contestantName,problemFolder:r.problemFolder,line: r.line, uid: r.uid, username: r.username, problem: r.problem, pid: r.pid, file: r.file, language: r.language, bytes: Buffer.byteLength(r.code), hash: r.hash, errors: r.errors, state: r.state, rid: r.pid && r.state !== 'pending' ? String(r.rid) : null, result });
     }
     const canResume = ['interrupted', 'attention'].includes(job.state) || (job.state === 'confirming' && Date.now() - job.updatedAt.getTime() >= 120_000) || (job.state === 'running' && !!job.heartbeat && Date.now() - job.heartbeat.getTime() >= 120_000);
-    return { canResume, ignoredFiles: job.ignoredFiles ?? [], id: String(job._id), contestId: job.contestId, title: job.title, actor: job.actor, state: job.state, revision: job.revision, error: job.error, createdAt: job.createdAt, expiresAt: job.expiresAt, participants: new Set(rows.map(r => r.uid)).size, rows: output };
+    return { canResume, needsMatch, ignoredFiles, id: String(job._id), contestId: job.contestId, title: job.title, actor: job.actor, state: job.state, revision: job.revision, error: job.error, createdAt: job.createdAt, expiresAt: job.expiresAt, participants: new Set(rows.filter(r=>!r.excluded).map(r => r.uid)).size, rows: output };
   }
   async history(actor: number, domain: string, id: string) {
     await this.permit(actor, domain);
     if (!/^[a-f\d]{24}$/i.test(id)) throw new ImportError(400, '比赛 ID 无效');
     await this.permit(actor, domain, id);
     return (await this.jobs.find({ domainId: domain, contestId: id }).sort({ createdAt: -1 }).limit(30).toArray()).map(j => ({ id: String(j._id), state: j.state, count: j.count, createdAt: j.createdAt, actor: j.actor }));
+  }
+  async match(actor:number,domain:string,id:string,revision:number,mapping:unknown,language?:unknown) {
+    const job=await this.job(actor,domain,id);
+    if(job.actor!==actor)throw new ImportError(403,'只能调整自己的导入预览');
+    if(job.state!=='preview'||job.revision!==revision||job.expiresAt<=new Date())throw new ImportError(409,'预览已变化或过期');
+    if(await this.claims.findOne({_id:contestKey(domain,job.contestId)}))throw new ImportError(409,'比赛已经确认正式批次');
+    const contest=await this.gateway.contest(domain,job.contestId);
+    if(contest.fingerprint!==job.fingerprint)throw new ImportError(409,'比赛配置已变化，请重新预览');
+    const rows=await this.rows.find({jobId:job._id}).sort({line:1}).toArray();
+    if(rows.length!==job.count)throw new ImportError(409,'预览明细不完整');
+    const fresh=await this.createPreview(actor,domain,contest,rows,job.ignoredFiles??[],mapping,language,language===undefined);
+    try { await this.cancel(actor,domain,id,revision); }
+    catch(error) { await this.cancel(actor,domain,fresh.id,fresh.revision);throw error; }
+    return fresh;
   }
   async confirm(actor: number, domain: string, id: string, revision: number) {
     const job = await this.job(actor, domain, id);
@@ -82,10 +107,11 @@ export class ImportService {
     const contest = await this.gateway.contest(domain, job.contestId);
     if (contest.fingerprint !== job.fingerprint) throw new ImportError(409, '比赛、题目或语言配置已变化，请重新预览');
     const rows = await this.rows.find({ jobId: job._id }).sort({ line: 1 }).toArray();
-    if (rows.length !== job.count || rows.some(r => r.errors.length)) throw new ImportError(409, '预览存在错误，不能确认');
-    await this.gateway.participants?.(actor, domain, job.contestId, [...new Set(rows.map(r=>r.uid))]);
+    if(rows.some(r=>!matchesFolderFile(r)))throw new ImportError(409,'请先应用文件选择与匹配');
+    if (rows.length !== job.count || !rows.some(r=>!r.excluded) || rows.some(r => !r.excluded&&r.errors.length)) throw new ImportError(409, '预览存在错误，不能确认');
+    await this.gateway.participants?.(actor, domain, job.contestId, [...new Set(rows.filter(r=>!r.excluded).map(r=>r.uid))]);
     const rechecked = await this.gateway.resolve(contest, rows);
-    if (rechecked.some(r => r.errors.length)) throw new ImportError(409, '账号、成员关系或已有提交已变化，请重新预览');
+    if (rechecked.some(r => !r.excluded&&r.errors.length)) throw new ImportError(409, '账号、成员关系或已有提交已变化，请重新预览');
     const locked = await this.jobs.updateOne({ _id: job._id, state: 'preview', revision }, { $set: { state: 'confirming', updatedAt: new Date() }, $inc: { revision: 1 } });
     if (!locked.modifiedCount) throw new ImportError(409, '预览状态已变化');
     // The permanent unique contest claim is the single-upload boundary. It is
@@ -126,7 +152,7 @@ export class ImportService {
   }
   private async checkpoint(job: Job, token: string): Promise<Contest> {
     if (!await this.gateway.authorize(job.actor, job.domainId, job.contestId)) throw new ImportError(403, '操作人的比赛管理权限已失效');
-    await this.gateway.participants?.(job.actor, job.domainId, job.contestId, (await this.rows.find({jobId:job._id}).project({uid:1}).toArray()).map(r=>r.uid));
+    await this.gateway.participants?.(job.actor, job.domainId, job.contestId, (await this.rows.find({jobId:job._id,excluded:{$ne:true}}).project({uid:1}).toArray()).map(r=>r.uid));
     const contest = await this.gateway.contest(job.domainId, job.contestId);
     if (contest.fingerprint !== job.fingerprint) throw new ImportError(409, '比赛配置变化，批次已暂停');
     const lock = await this.jobs.updateOne({ _id: job._id, state: 'running', token }, { $set: { heartbeat: new Date(), updatedAt: new Date() } });
@@ -150,7 +176,7 @@ export class ImportService {
       for (const j of judging) {
         const rows = await this.rows.find({ jobId: j._id }).toArray();
         let complete = rows.length === j.count;
-        for (const r of rows) if (r.pid && !(await this.gateway.result(j, r)).terminal) { complete = false; break; }
+        for (const r of rows) if (!r.excluded && r.pid && !(await this.gateway.result(j, r)).terminal) { complete = false; break; }
         if (complete) {
           await this.jobs.updateOne({ _id: j._id, state: 'judging' }, { $set: { state: 'complete', updatedAt: new Date() }, $inc: { revision: 1 } });
           await this.claims.updateOne({ jobId: j._id }, { $set: { state: 'complete' } });
@@ -164,7 +190,7 @@ export class ImportService {
       const rows = await this.rows.find({ jobId: job._id }).sort({ line: 1 }).toArray();
       if (rows.length !== job.count) throw new ImportError(409, '批次明细不完整，已停止');
       // Register every participant and every official record before dispatching.
-      for (const row of rows) if (row.state === 'pending') {
+      for (const row of rows) if (!row.excluded && row.state === 'pending') {
         const contest = await this.checkpoint(job, token);
         const checked = await this.gateway.resolve(contest, [row], String(job._id));
         if (checked[0].errors.length) throw new ImportError(409, checked[0].errors.join('；'));
@@ -173,6 +199,7 @@ export class ImportService {
         row.state = 'registered';
       }
       for (const row of rows) {
+        if(row.excluded)continue;
         await this.checkpoint(job, token);
         if (!row.pid) { await this.rows.updateOne({ _id: row._id }, { $set: { state: 'queued' } }); continue; }
         if (row.state === 'queued') continue;

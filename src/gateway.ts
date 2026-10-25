@@ -75,6 +75,7 @@ export class HydroGateway implements Gateway {
       }
       if(row.problemFolder&&!row.manualProblem){const matches=problemAliases.get(row.problemFolder.toLowerCase())||[];if(matches.length!==1){row.problem='';errors.push(matches.length?'题目英文名不唯一，请指定题目':'题目英文名未匹配，请指定题目');}else{row.problem=String(matches[0]);if('pid'in original&&original.pid&&original.pid!==matches[0])errors.push('题目匹配已变化，请重新预览');}}
 
+      if(row.excluded){result.push({...row,pid:0,username:row.contestantName||`UID ${row.uid}`,errors:[],rid:new ObjectId()});continue;}
       const u = await this.db.collection('user').findOne({ _id: row.uid as any }, { projection: { _id: 1, uname: 1, priv: 1 } });
       if (!u || !((u.priv & PRIV.PRIV_USER_PROFILE) === PRIV.PRIV_USER_PROFILE)) errors.push('账号不存在或已停用');
       const member = await this.db.collection('domain.user').findOne({ domainId: contest.domainId, uid: row.uid, join: true });
@@ -102,6 +103,8 @@ export class HydroGateway implements Gateway {
       }
       result.push({ ...row, pid, username: row.uid>0 ? u?.uname || `UID ${row.uid}` : row.contestantName || '未匹配', errors, rid: new ObjectId() });
     }
+    const counts=new Map<string,number>();for(const r of result)if(!r.excluded&&r.pid)counts.set(`${r.uid}:${r.pid}`,(counts.get(`${r.uid}:${r.pid}`)||0)+1);
+    for(const r of result)if(!r.excluded&&r.pid&&(counts.get(`${r.uid}:${r.pid}`)||0)>1&&!r.errors.includes('同一选手同一题只能有一份正式代码'))r.errors.push('同一选手同一题只能有一份正式代码');
     return result;
   }
   async register(job: Job, row: Row) {

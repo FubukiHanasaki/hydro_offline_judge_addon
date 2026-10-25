@@ -26,7 +26,6 @@ export async function readArchive(bytes: Uint8Array): Promise<InputRow[] & { ign
   try {
     const files = new Map<string, FileEntry>();
     const names = new Set<string>();
-    const directories: string[] = [];
     let count = 0, declared = 0;
     for await (const entry of reader.getEntriesGenerator()) {
       if (++count > LIMITS.entries) bad('ZIP 条目过多');
@@ -37,7 +36,7 @@ export async function readArchive(bytes: Uint8Array): Promise<InputRow[] & { ign
       const mode = (entry.externalFileAttributes >>> 16) & 0xf000;
       if (mode && mode !== 0x8000 && mode !== 0x4000) bad('ZIP 不允许链接或特殊文件');
       if (entry.encrypted) bad('不支持加密 ZIP');
-      if (entry.directory) { directories.push(name); continue; }
+      if (entry.directory) continue;
       if (!Number.isSafeInteger(entry.uncompressedSize) || entry.uncompressedSize < 0) bad('ZIP 文件大小无效');
       const limit = name === 'submissions.csv' ? LIMITS.manifest : LIMITS.expanded;
       if (entry.uncompressedSize > limit) bad(`${name} 超出大小限制`);
@@ -69,11 +68,11 @@ export async function readArchive(bytes: Uint8Array): Promise<InputRow[] & { ign
       const metadata=(p:string)=>p.split('/').some(part=>part.startsWith('.')||part==='__MACOSX');
       const source=(p:string)=>!metadata(p)&&Object.hasOwn(extensions,p.split('.').pop()!.toLowerCase());
       const validProblem=(p:string)=>/^[A-Za-z][A-Za-z0-9_-]{0,79}$/.test(p);
-      const direct=[...files.keys()].filter(p=>source(p)&&p.split('/').length===3&&validProblem(p.split('/')[1]));
-      const nested=[...files.keys()].filter(p=>source(p)&&p.startsWith('src/')&&p.split('/').length===4&&validProblem(p.split('/')[2]));
-      if(direct.length&&nested.length)bad('代码包同时包含两种选手目录结构，请统一后上传');
+      const matches=(p:string,depth:number)=>{const parts=p.split('/');if(!source(p)||parts.length!==depth||!validProblem(parts[depth-2]))return false;const file=parts[depth-1],ext=file.split('.').pop()!;return file.slice(0,-ext.length-1)===parts[depth-2];};
+      const direct=[...files.keys()].filter(p=>matches(p,3));
+      const nested=[...files.keys()].filter(p=>p.startsWith('src/')&&matches(p,4));
       const wrapped=nested.length>0,paths=wrapped?nested:direct;
-      if(!paths.length)bad('规定目录结构内没有支持的代码文件');
+      if(!paths.length)bad('未找到题目目录名与文件名完全一致的代码文件');
       const selected=new Set(paths),ignoredFiles=[...files.keys()].filter(p=>!selected.has(p));
       const rows:InputRow[]=[];const people=new Set<string>();
       for(const path of paths){
@@ -86,7 +85,7 @@ export async function readArchive(bytes: Uint8Array): Promise<InputRow[] & { ign
         rows.push({line:rows.length+1,uid:0,contestantName:person,problemFolder:problem,problem,language:extensions[ext],file:path,code,hash:createHash('sha256').update(code).digest('hex')});people.add(person);
         if(rows.length>LIMITS.rows)bad('每批最多500条提交');
       }
-      for(const path of directories){if(metadata(path))continue;const parts=path.split('/');if(wrapped){if(parts[0]!=='src')continue;parts.shift();}if(parts.length===1&&parts[0]&&!people.has(parts[0])&&![...files.keys()].some(p=>p.startsWith(path+'/'))&&!directories.some(p=>p.startsWith(path+'/'))){people.add(parts[0]);rows.push({line:rows.length+1,uid:0,contestantName:parts[0],problem:'',file:'',language:'',code:'',hash:''});}}
+
       if(rows.length>LIMITS.rows)bad('每批最多500条提交');
       return Object.assign(rows,{ignoredFiles});
     }
