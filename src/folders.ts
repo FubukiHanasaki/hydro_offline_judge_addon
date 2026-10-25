@@ -10,7 +10,3 @@ export function applyFolderMapping(rows: InputRow[], contest: Contest, value: un
   for(const [key,v]of Object.entries(problems))if(!folders.has(key)||!Number.isSafeInteger(v)||!contest.pids.includes(v as number))throw new ImportError(400,'题目匹配超出当前比赛');
   return rows.map(row=>({...row,...row.contestantName&&Object.hasOwn(people,row.contestantName)?{uid:(people as Record<string,number>)[row.contestantName],manualUid:true}:{},...row.problemFolder&&Object.hasOwn(problems,row.problemFolder)?{problem:String((problems as Record<string,number>)[row.problemFolder]),manualProblem:true}:{}}));
 }
-export function folderLanguage(kind:string,langs:Record<string,any>):string {
- const choices:Record<string,string[]>={cpp:['cc.cc17o2','cc.cc17','cc','cc.cc14o2','cc.cc20o2'],c:['c.c11o2','c.c11','c'],pas:['pas'],py3:['py.py3','py3','python3'],java:['java'],rs:['rs']};
- return (choices[kind]||[]).find(id=>langs[id]&&!langs[id].disabled&&!langs[id].isBinary)||'';
-}

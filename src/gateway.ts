@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { ObjectId, type Db } from 'mongodb';
 import { ContestModel, ProblemModel, RecordModel, UserModel, SettingModel, SystemModel, PERM, PRIV, STATUS } from 'hydrooj';
 import { ImportError, LIMITS, type Contest, type Gateway, type InputRow, type Job, type Row } from './types';
-import { folderLanguage } from './folders';
+import { allowedLanguages, languageErrors } from './languages';
 export class HydroGateway implements Gateway {
   constructor(readonly db: Db) {}
   async authorize(actor: number, domain: string, contestId?: string) {
@@ -54,7 +54,7 @@ export class HydroGateway implements Gateway {
     const d = await this.db.collection('domain').findOne({ _id: domain as any });
     if (!d) throw new ImportError(404, '子域不存在');
     const problems = [];
-    for (const pid of t.pids) { const { p, effective: e } = await this.problem(domain, pid); problems.push([pid, p.reference, e.config, e.data]); }
+    for (const pid of t.pids) { const { p, effective: e } = await this.problem(domain, pid); const source=p.reference?await this.db.collection('domain').findOne({_id:p.reference.domainId as any}):null; if(p.reference&&!source)throw new ImportError(409,'题目来源子域不存在');problems.push([pid, p.reference, e.config, e.data, source?.langs]); }
     const fingerprint = createHash('sha256').update(JSON.stringify([t.title, t.rule, t.beginAt, t.endAt, t.pids, t.score, t.langs, t.lockAt, t.unlocked, d.langs, problems, SettingModel.langs, SystemModel.get('limit.codelength')])).digest('hex');
     return { id, domainId: domain, title: t.title, rule: t.rule, beginAt: t.beginAt, endAt: t.endAt, pids: t.pids, fingerprint };
   }
@@ -74,7 +74,6 @@ export class HydroGateway implements Gateway {
         else if(row.uid>0&&row.uid!==ids[0])errors.push('姓名对应账号已变化，请重新预览');else row.uid=ids[0];
       }
       if(row.problemFolder&&!row.manualProblem){const matches=problemAliases.get(row.problemFolder.toLowerCase())||[];if(matches.length!==1){row.problem='';errors.push(matches.length?'题目英文名不唯一，请指定题目':'题目英文名未匹配，请指定题目');}else{row.problem=String(matches[0]);if('pid'in original&&original.pid&&original.pid!==matches[0])errors.push('题目匹配已变化，请重新预览');}}
-      if(row.contestantName&&row.file){row.language=folderLanguage(/\.([^.]+)$/.exec(row.file)?.[1].toLowerCase().replace(/^(cc|cxx)$/,'cpp').replace(/^py$/,'py3')||'',SettingModel.langs);}
 
       const u = await this.db.collection('user').findOne({ _id: row.uid as any }, { projection: { _id: 1, uname: 1, priv: 1 } });
       if (!u || !((u.priv & PRIV.PRIV_USER_PROFILE) === PRIV.PRIV_USER_PROFILE)) errors.push('账号不存在或已停用');
@@ -88,12 +87,13 @@ export class HydroGateway implements Gateway {
         if (!pid) errors.push('题号不在这场比赛中');
         if (seen.has(`${row.uid}:${pid}`)) errors.push('同一选手同一题只能有一份正式代码');
         seen.add(`${row.uid}:${pid}`);
-        const lang = Object.hasOwn(SettingModel.langs, row.language) && SettingModel.langs[row.language];
-        if (!lang || lang.disabled || lang.isBinary) errors.push('语言未启用或不是源代码语言，请使用服务器语言 ID');
         if (pid) {
           try {
-            const { effective: p } = await this.problem(contest.domainId, pid);
-            for (const allowed of [p.config.langs, t.langs, d?.langs?.split(',').map((v: string) => v.trim())]) if (allowed?.length && !allowed.includes(row.language)) errors.push('题目、比赛或子域不允许该语言');
+            const { p:local, effective:p } = await this.problem(contest.domainId,pid);
+            const source=local.reference?await this.db.collection('domain').findOne({_id:local.reference.domainId as any}):null;
+            if(local.reference&&!source)throw new ImportError(409,'题目来源子域不存在');
+            const allowed=allowedLanguages(SettingModel.langs,{problem:p.config.langs,contest:t.langs,domain:d?.langs,sourceDomain:source?.langs});
+            errors.push(...languageErrors(row.language,SettingModel.langs,allowed));
           } catch (e) { errors.push(e instanceof ImportError ? e.message : '无法读取题目'); }
           const existing = await this.db.collection('record').find({ domainId: contest.domainId, contest: new ObjectId(contest.id), uid: row.uid, pid }, { projection: { offlineImport: 1 } }).limit(2).toArray();
           if (existing.some(r => !ownJob || r.offlineImport?.jobId !== ownJob)) errors.push('已有正式比赛提交，不能覆盖');

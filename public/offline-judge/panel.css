@@ -51,3 +51,12 @@
 #oj-mapping { padding:16px 0; border-bottom:1px solid #ddd; margin-bottom:16px; }
 #oj-mapping>.button { margin:14px 0 0; }
 @media(max-width:640px) { .oj-match-grid { grid-template-columns:minmax(0,1fr); } }
+
+/* Do not inherit Hydro table ellipsis for validation messages or source paths. */
+#offline-app .data-table { table-layout:auto; }
+#offline-app .data-table th,#offline-app .data-table td { white-space:normal!important; overflow:visible!important; text-overflow:clip!important; overflow-wrap:anywhere; line-height:1.6; }
+#offline-app .data-table th:nth-child(4),#offline-app .data-table td:nth-child(4) { min-width:200px; }
+#offline-app .oj-error,#offline-app td small { white-space:normal; overflow:visible; text-overflow:clip; overflow-wrap:anywhere; }
+
+#offline-app .oj-language-field { flex:1 1 220px; }
+#offline-app .oj-language-field .select { min-height:38px; }

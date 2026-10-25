@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { ObjectId, type Db } from 'mongodb';
 import { readArchive } from './archive';
 import { applyFolderMapping } from './folders';
+import { applyUploadLanguage } from './languages';
 import { ImportError, LIMITS, type Contest, type Gateway, type Job, type Row } from './types';
 export const contestKey = (domain: string, id: string) => `${domain}:${id}`;
 export class ImportService {
@@ -30,12 +31,12 @@ export class ImportService {
     const claim = await this.claims.findOne({ _id: contestKey(domain, id) });
     return { ...contest, formalBatch: claim ? { id: String(claim.jobId), state: claim.state } : null };
   }
-  async preview(actor: number, domain: string, id: string, bytes: Uint8Array, mapping?: unknown) {
+  async preview(actor: number, domain: string, id: string, bytes: Uint8Array, mapping?: unknown, language?: unknown) {
     await this.permit(actor, domain, id);
     const contest = await this.gateway.contest(domain, id);
     if (await this.claims.findOne({ _id: contestKey(domain, id) })) throw new ImportError(409, '这场比赛已经确认过正式代码，只能在原批次查看或继续');
     if (await this.jobs.countDocuments({ actor, state: 'preview', createdAt: { $gt: new Date(Date.now() - LIMITS.previewMs) } }) >= 5) throw new ImportError(429, '最多保留 5 个有效预览，请先取消不需要的批次');
-    const input = applyFolderMapping(await readArchive(bytes),contest,mapping);
+    const input = applyUploadLanguage(applyFolderMapping(await readArchive(bytes),contest,mapping),language);
     const resolved = await this.gateway.resolve(contest, input);
     await this.gateway.participants?.(actor, domain, id, [...new Set(resolved.map(r=>r.uid).filter(uid=>uid>0))]);
     const now = new Date(), job: Job = {

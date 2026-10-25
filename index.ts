@@ -51,7 +51,7 @@ export async function apply(ctx: Context) {
     async get() { await this.run(async () => {
       const contest = await service.competition(this.user._id, this.domain._id, this.context.params.tid);
       // Config endpoint is authorized, but never returns test data or secrets.
-      const langs = Object.entries(SettingModel.langs).filter(([, v]) => !v.disabled && !v.isBinary).map(([id, v]) => ({ id, name: v.display || id }));
+      const langs = Object.entries(SettingModel.langs).filter(([, v]) => !v.disabled && !v.isBinary && !v.remote).map(([id, v]) => ({ id, name: v.display || id }));
       const problems=[];for(const pid of contest.pids){const {p}=await gateway.problem(contest.domainId,pid);problems.push({pid,title:p.title,label:p.pid||String(pid)});}
       return { ...contest, problems, languages: langs, history: await service.history(this.user._id, this.domain._id, contest.id) };
     }); }
@@ -66,7 +66,7 @@ export async function apply(ctx: Context) {
         if (!info.isFile() || info.size !== file.size || info.size > LIMITS.zip) throw new ImportError(400, '上传文件大小不正确');
         const raw=this.context.request.body?.mapping;let mapping:unknown;
         if(raw!==undefined){if(typeof raw!=='string'||raw.length>65536)throw new ImportError(400,'匹配设置过大');try{mapping=JSON.parse(raw);}catch{throw new ImportError(400,'匹配设置格式错误');}}
-        return await service.preview(this.user._id, this.domain._id, this.context.params.tid, await readFile(file.filepath),mapping);
+        return await service.preview(this.user._id, this.domain._id, this.context.params.tid, await readFile(file.filepath),mapping,this.context.request.body?.language);
       } finally { parsing--; }
     }); }
   }

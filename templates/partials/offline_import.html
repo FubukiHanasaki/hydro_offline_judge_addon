@@ -6,6 +6,7 @@
         <div id="oj-notice" role="alert" hidden></div>
         <form id="oj-upload" class="oj-toolbar">
           <label class="oj-grow">代码包<input id="oj-file" type="file" accept=".zip,application/zip" required></label>
+          <label class="oj-language-field">提交语言<select id="oj-language" class="select" required><option value="">请选择语言</option></select></label>
           <button id="oj-preview" class="primary rounded button" type="submit"><span class="icon icon-search"></span> 上传并预览</button>
         </form>
         <div class="oj-inline-links"><button id="oj-format" class="link" type="button" aria-expanded="false">打包格式</button></div>
@@ -34,6 +35,5 @@
   </div>
   <aside class="medium-3 columns">
     <div class="section side"><div class="section__header"><h2 class="section__title">题目</h2></div><div class="section__body" id="oj-problems">加载中…</div></div>
-    <div class="section side"><div class="section__header"><h2 class="section__title">语言 ID</h2></div><div class="section__body oj-languages" id="oj-languages"></div></div>
   </aside>
 </div>
