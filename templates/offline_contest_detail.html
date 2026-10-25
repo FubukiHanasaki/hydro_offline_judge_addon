@@ -1,7 +1,7 @@
 {% extends offlineBaseTemplate %}
 {% block content %}
 {{ super() }}
-<link rel="stylesheet" href="{{ UiContext.cdn_prefix }}offline-judge/panel.css?v=manual-language-20261025">
+<link rel="stylesheet" href="{{ UiContext.cdn_prefix }}offline-judge/panel.css?v=native-ui-colors-20261025">
 <dialog id="offline-import-dialog" class="oj-import-dialog" aria-labelledby="offline-import-title">
   <header class="oj-dialog-header"><h2 id="offline-import-title">提交离线代码包</h2><button type="button" class="oj-dialog-close" data-offline-close aria-label="关闭">×</button></header>
   <div class="oj-dialog-body">{% include "partials/offline_import.html" %}</div>

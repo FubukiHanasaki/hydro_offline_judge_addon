@@ -38,11 +38,6 @@
 .oj-import-dialog button:focus-visible,.oj-native-entry button:focus-visible { outline:2px solid #3498db; outline-offset:3px; }
 @media(max-width:767px) { .oj-import-dialog { width:calc(100vw - 16px); } .oj-dialog-header,.oj-dialog-footer { padding:14px 16px; } #offline-app .columns { width:100%; } #offline-app .section { margin-left:0; margin-right:0; } }
 
-/* Product rule: black text; no faded captions or secondary copy. */
-.oj-import-dialog,.oj-import-dialog *, .oj-native-entry,.oj-native-entry * { color:#000 !important; }
-.oj-import-dialog :disabled { opacity:1; -webkit-text-fill-color:#000; }
-.oj-import-dialog .button:disabled { background:#eee; border-color:#ddd; cursor:not-allowed; }
-.oj-import-dialog input::placeholder { color:#000; opacity:1; }
 #offline-app td small,#offline-app .oj-mobile-card small { font-size:14px; }
 
 .oj-match-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 20px; }
