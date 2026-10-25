@@ -38,10 +38,8 @@
   }
   function alphabet(index) { let out = ''; for (index++; index > 0; index = Math.floor((index - 1) / 26)) out = String.fromCharCode(65 + (index - 1) % 26) + out; return out; }
   function drawCompetition(c) {
-    $('contest-meta').textContent = `${c.title} · ${c.pids.length} 道题 · ${c.formalBatch ? '本场已确认正式代码' : '尚未导入正式代码'}`;
+    document.getElementById('offline-import-title').textContent = '提交离线代码包 · ' + c.title;
     $('problems').replaceChildren(...c.pids.map((pid, index) => node('p', `${alphabet(index)} · 题目 ${pid}`)));
-    $('links').replaceChildren();
-    for (const [path, text] of [[`/contest/${c.id}`, '查看比赛'], [`/contest/${c.id}/scoreboard`, '正式成绩榜']]) { const a = node('a', text); a.href = prefix + path; $('links').append(a); }
     $('languages').replaceChildren(...c.languages.map(lang => { const div = node('div', undefined, 'oj-language'); div.append(node('code', lang.id), node('span', ` · ${lang.name}`)); return div; }));
     $('history').replaceChildren();
     if (!c.history.length) $('history').textContent = '暂无导入记录';
@@ -56,7 +54,7 @@
     const version = ++serial;
     clearTimeout(timer); batch = null; competition = null; $('preview-section').hidden = true; $('consent').checked = false; notice(); controls();
     const id = $('contest').value;
-    if (!id) { $('contest-meta').textContent = '当前子域暂无已结束的 OI 比赛'; return; }
+    if (!id) { notice('比赛 ID 缺失'); return; }
     try {
       const c = await api(`${base}/${encodeURIComponent(id)}`);
       if (version !== serial) return;

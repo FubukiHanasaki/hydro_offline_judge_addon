@@ -2,8 +2,7 @@
   <div class="medium-9 columns">
     <div class="section">
       <div class="section__body">
-        <p class="help-text">一次导入正式代码 · 包内选手统一参赛 · 后续提交作为订正</p>
-        <input id="oj-contest" type="hidden" value="{{ offlineSelected }}"><div class="oj-competition-line"><p id="oj-contest-meta" class="help-text"></p><button id="oj-refresh" class="link" type="button">刷新</button></div>
+        <input id="oj-contest" type="hidden" value="{{ offlineSelected }}"><div class="oj-competition-line"><button id="oj-refresh" class="link" type="button">刷新</button></div>
         <div id="oj-notice" role="alert" hidden></div>
         <form id="oj-upload" class="oj-toolbar">
           <label class="oj-grow">代码包<input id="oj-file" type="file" accept=".zip,application/zip" required></label>
@@ -40,7 +39,7 @@ code/247/A.cpp</pre>
     <section class="section"><div class="section__header"><h2 class="section__title">导入记录</h2></div><div class="section__body" id="oj-history">加载中…</div></section>
   </div>
   <aside class="medium-3 columns">
-    <div class="section side"><div class="section__header"><h2 class="section__title">比赛信息</h2></div><div class="section__body" id="oj-problems">加载中…</div><div class="section__body" id="oj-links"></div></div>
+    <div class="section side"><div class="section__header"><h2 class="section__title">题目</h2></div><div class="section__body" id="oj-problems">加载中…</div></div>
     <div class="section side"><div class="section__header"><h2 class="section__title">语言 ID</h2></div><div class="section__body oj-languages" id="oj-languages"></div></div>
   </aside>
 </div>
