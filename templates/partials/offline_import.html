@@ -1,14 +1,9 @@
-{% extends "layout/basic.html" %}
-{% block content %}
-<link rel="stylesheet" href="{{ UiContext.cdn_prefix }}offline-judge/panel.css?v=20261022-a">
 <div class="row" id="offline-app" data-api="{{ offlineApi }}" data-batches="{{ offlineBatchBase }}" data-selected="{{ offlineSelected }}">
   <div class="medium-9 columns">
     <div class="section">
-      <div class="section__header"><h1 class="section__title"><span class="icon icon-upload"></span> 离线赛评测</h1></div>
       <div class="section__body">
         <p class="help-text">一次导入正式代码 · 包内选手统一参赛 · 后续提交作为订正</p>
-        <div class="oj-toolbar"><label class="oj-grow">OI 比赛<select id="oj-contest" class="select"><option value="">加载中…</option></select></label><button id="oj-refresh" class="rounded button" type="button">刷新</button></div>
-        <p id="oj-contest-meta" class="help-text"></p>
+        <input id="oj-contest" type="hidden" value="{{ offlineSelected }}"><div class="oj-competition-line"><p id="oj-contest-meta" class="help-text"></p><button id="oj-refresh" class="link" type="button">刷新</button></div>
         <div id="oj-notice" role="alert" hidden></div>
         <form id="oj-upload" class="oj-toolbar">
           <label class="oj-grow">代码包<input id="oj-file" type="file" accept=".zip,application/zip" required></label>
@@ -16,7 +11,7 @@
         </form>
         <div class="oj-inline-links"><button id="oj-manifest" class="link" type="button">下载清单模板</button><button id="oj-format" class="link" type="button" aria-expanded="false">打包格式</button></div>
         <div id="oj-format-body" class="oj-format" hidden>
-          <p>ZIP 根目录放 submissions.csv，代码文件路径必须与清单一致。所有文件使用 UTF-8；语言填写右侧服务器语言 ID。</p>
+          <p>ZIP 根目录放 submissions.csv，代码文件路径必须与清单一致。所有文件使用 UTF-8；语言填写服务器语言 ID。</p>
           <pre>submissions.csv
 code/246/A.cpp
 code/246/B.cpp
@@ -42,13 +37,10 @@ code/247/A.cpp</pre>
         <div class="oj-action-buttons"><button id="oj-cancel" class="rounded button" type="button">取消预览</button><button id="oj-resume" class="rounded button" type="button" hidden>检查并继续原批次</button><button id="oj-confirm" class="primary rounded button" type="button" disabled>确认导入并评测</button></div>
       </div>
     </section>
-    <section class="section"><div class="section__header"><h2 class="section__title">导入记录</h2></div><div class="section__body" id="oj-history">请选择比赛</div></section>
+    <section class="section"><div class="section__header"><h2 class="section__title">导入记录</h2></div><div class="section__body" id="oj-history">加载中…</div></section>
   </div>
   <aside class="medium-3 columns">
-    <div class="section side"><div class="section__header"><h2 class="section__title">比赛信息</h2></div><div class="section__body" id="oj-problems">请选择比赛</div><div class="section__body" id="oj-links"></div></div>
+    <div class="section side"><div class="section__header"><h2 class="section__title">比赛信息</h2></div><div class="section__body" id="oj-problems">加载中…</div><div class="section__body" id="oj-links"></div></div>
     <div class="section side"><div class="section__header"><h2 class="section__title">语言 ID</h2></div><div class="section__body oj-languages" id="oj-languages"></div></div>
-    <div class="section side"><div class="section__body help-text">Hydro Offline Judge · v0.1.0<br>FubukiHanasaki</div></div>
   </aside>
 </div>
-<script defer src="{{ UiContext.cdn_prefix }}offline-judge/panel.js?v=20261022-a"></script>
-{% endblock %}

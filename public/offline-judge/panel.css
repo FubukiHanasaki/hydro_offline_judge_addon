@@ -16,3 +16,24 @@
   #offline-app .oj-card-foot { border-top:1px solid #e4eaf0; padding-top:10px; font-size:12px }
   #offline-app .oj-card-foot > div { text-align:right }
 }
+
+.oj-import-dialog { width:min(1200px,calc(100vw - 32px)); max-width:1200px; max-height:90vh; padding:0; border:0; border-radius:5px; color:#34495e; }
+.oj-import-dialog[open] { display:flex; flex-direction:column; }
+.oj-import-dialog::backdrop { background:rgba(30,40,50,.48); }
+.oj-dialog-header,.oj-dialog-footer { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:18px 22px; flex-shrink:0; }
+.oj-dialog-header { border-bottom:1px solid #e4e9ef; }
+.oj-dialog-header h2 { margin:0; font-size:1.2rem; font-weight:400; }
+.oj-dialog-close { border:0; background:transparent; font:inherit; font-size:26px; line-height:1; color:#657687; cursor:pointer; padding:4px; }
+.oj-dialog-footer { justify-content:flex-end; border-top:1px solid #e4e9ef; }
+.oj-dialog-footer .button { margin:0; }
+.oj-dialog-body { overflow:auto; min-height:0; padding:18px 12px; background:#f6f8fa; }
+.oj-dialog-body > .row { max-width:none; }
+#offline-app .section { box-shadow:none; margin-bottom:16px; }
+#offline-app .oj-competition-line { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+#offline-app .oj-competition-line p { margin:0; }
+#offline-app .oj-competition-line button { flex-shrink:0; }
+.oj-native-entry { margin:4px 0 10px; }
+.oj-native-entry .tool-button { border:0; background:transparent; padding:0; font:inherit; font-size:.875rem; color:#5f8cab; cursor:pointer; }
+.oj-native-entry .tool-button:hover { color:#3498db; }
+.oj-import-dialog button:focus-visible,.oj-native-entry button:focus-visible { outline:2px solid #3498db; outline-offset:3px; }
+@media(max-width:767px) { .oj-import-dialog { width:calc(100vw - 16px); } .oj-dialog-header,.oj-dialog-footer { padding:14px 16px; } #offline-app .columns { width:100%; } #offline-app .section { margin-left:0; margin-right:0; } }

@@ -4,6 +4,7 @@
   const app = document.getElementById('offline-app');
   if (!app || app.dataset.ready) return;
   app.dataset.ready = '1';
+  const dialog = document.getElementById('offline-import-dialog');
   const $ = id => document.getElementById(`oj-${id}`);
   const base = app.dataset.api, prefix = base.slice(0, base.indexOf('/offline-judge/'));
   const labels = { preview: '待确认', confirming: '正在确认', queued: '等待导入', running: '正在导入', interrupted: '导入中断', attention: '需要检查', judging: '正在评测', complete: '评测完成', cancelled: '已取消', expired: '已过期' };
@@ -114,6 +115,7 @@
   }
   function schedulePoll() {
     clearTimeout(timer);
+    if (dialog && !dialog.open) return;
     if (!batch || !['queued', 'running', 'judging', 'confirming'].includes(batch.state)) return;
     const id = batch.id;
     timer = setTimeout(() => openBatch(id).catch(e => notice(e.message)), 3000);
@@ -154,13 +156,29 @@
     const a = node('a'); a.download = 'submissions.csv'; a.href = URL.createObjectURL(blob); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   });
   window.addEventListener('pagehide', () => clearTimeout(timer));
-  (async () => {
+  async function openImporter() {
+    if (!dialog || dialog.open) return;
+    dialog.showModal();
+    if (busy) return;
     try {
-      const contests = await api(base); $('contest').replaceChildren();
-      for (const c of contests) { const option = node('option', c.title); option.value = c.id; $('contest').append(option); }
-      if (!contests.length) { const option = node('option', '暂无已结束的 OI 比赛'); option.value = ''; $('contest').append(option); }
-      if (contests.some(c => c.id === app.dataset.selected)) $('contest').value = app.dataset.selected;
-      await loadCompetition();
+      if (!competition) await loadCompetition();
+      else { await refreshDetails(); if (batch) await openBatch(batch.id); }
     } catch (e) { notice(e.message); controls(); }
-  })();
+  }
+  if (dialog) {
+    const existing = document.querySelector('[data-offline-open]');
+    if (!existing) {
+      const header = document.querySelector('.row > .medium-9.columns > .section:first-child > .section__header');
+      if (header) {
+        const tools = node('div', undefined, 'oj-native-entry');
+        const entry = node('button', '提交离线代码包', 'tool-button');
+        entry.type = 'button'; entry.dataset.offlineOpen = ''; tools.append(entry); header.append(tools);
+      }
+    }
+    document.querySelectorAll('[data-offline-open]').forEach(b => b.addEventListener('click', openImporter));
+    dialog.querySelectorAll('[data-offline-close]').forEach(b => b.addEventListener('click', () => dialog.close()));
+    dialog.addEventListener('close', () => clearTimeout(timer));
+    window.addEventListener('hashchange', () => { if (location.hash === '#offline-code') void openImporter(); });
+    if (location.hash === '#offline-code') void openImporter();
+  }
 })();

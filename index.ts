@@ -1,7 +1,7 @@
 // Copyright (C) 2026 FubukiHanasaki. AGPL-3.0-or-later.
 import { readFile, stat } from 'node:fs/promises';
 import { ObjectId } from 'mongodb';
-import { Context, Handler, ForbiddenError, PERM, PRIV, RecordModel, SettingModel } from 'hydrooj';
+import { Context, Handler, ForbiddenError, PERM, RecordModel, SettingModel } from 'hydrooj';
 import { HydroGateway } from './src/gateway';
 import { ImportService } from './src/service';
 import { ImportError, LIMITS } from './src/types';
@@ -36,8 +36,9 @@ export async function apply(ctx: Context) {
     async get() {
       if (!this.user?._id || !await gateway.authorize(this.user._id, this.domain._id)) throw new ForbiddenError();
       this.response.addHeader('Cache-Control', 'private, no-store');
-      this.response.template = 'offline_judge.html';
-      this.response.body = { offlineApi: this.url('offline_judge_contests'), offlineBatchBase: this.url('offline_judge_batch', { id: '000000000000000000000000' }).replace(/\/0{24}$/, ''), offlineSelected: typeof this.context.query.tid === 'string' ? this.context.query.tid : '' };
+      const tid = typeof this.context.query.tid === 'string' ? this.context.query.tid : '';
+      if (tid && (!/^[a-f\d]{24}$/i.test(tid) || !await gateway.authorize(this.user._id, this.domain._id, tid))) throw new ForbiddenError();
+      this.response.redirect = tid ? this.url('contest_detail', { tid }) + '#offline-code' : this.url('contest_main');
     }
   }
   class Contests extends Api {
@@ -81,9 +82,6 @@ export async function apply(ctx: Context) {
   ctx.Route('offline_judge_contests', '/offline-judge/api/contests', Contests);
   ctx.Route('offline_judge_competition', '/offline-judge/api/contests/:tid', Competition);
   ctx.Route('offline_judge_batch', '/offline-judge/api/batches/:id', Batch);
-  ctx.injectUI('Nav', 'offline_judge_main', { prefix: 'offline_judge' }, PRIV.PRIV_USER_PROFILE, PERM.PERM_EDIT_CONTEST);
-  ctx.i18n.load('zh', { offline_judge_main: '离线赛评测' });
-  ctx.i18n.load('en', { offline_judge_main: 'Offline Judge' });
 
   // Native submit form remains usable. For a managed contest it is a correction:
   // preserve native language/file/rate/security validation, remove only the
@@ -124,13 +122,21 @@ export async function apply(ctx: Context) {
   ctx.on('handler/after/ProblemSubmit', async (h: any) => {
     if (h.offlineCorrection && h.response.template === 'problem_submit.html') h.response.template = 'offline_problem_submit.html';
   });
-  // Add the entry at existing contest management pages without replacing host
-  // templates. Template append blocks inherit the native management layout.
-  ctx.on('handler/after/ContestManagement', async (h: any) => {
-    if (h.tdoc?.rule === 'oi' && h.user.hasPerm(PERM.PERM_EDIT_CONTEST)) {
-      h.response.body.offlineJudgeUrl = h.url('offline_judge_main', { query: { tid: String(h.tdoc.docId) } });
-      if (h.response.template === 'contest_manage.html') h.response.template = 'offline_contest_manage.html';
-    }
+  // The importer belongs to one native OI contest; no standalone feature page.
+  ctx.on('handler/after/ContestDetail', async (h: any) => {
+    const tid = String(h.tdoc?.docId || '');
+    if (h.tdoc?.rule !== 'oi' || h.tdoc.endAt > new Date() || !/^[a-f\d]{24}$/i.test(tid)) return;
+    if (!['contest_detail.html', 'sms_contest_detail.html'].includes(h.response.template)) return;
+    if (!await gateway.authorize(h.user?._id || 0, h.domain._id, tid)) return;
+    h.response.addHeader('Cache-Control', 'private, no-store');
+    h.response.addHeader('Vary', 'Cookie, Authorization');
+    Object.assign(h.response.body, {
+      offlineBaseTemplate: h.response.template,
+      offlineApi: h.url('offline_judge_contests'),
+      offlineBatchBase: h.url('offline_judge_batch', { id: '000000000000000000000000' }).replace(/\/0{24}$/, ''),
+      offlineSelected: tid,
+    });
+    h.response.template = 'offline_contest_detail.html';
   });
   ctx.effect(() => {
     const timer = setInterval(() => { void service.tick().catch(() => console.error('[offline-judge] worker tick failed')); }, 1000);
