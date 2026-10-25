@@ -36,7 +36,8 @@ export class ImportService {
     const contest = await this.gateway.contest(domain, id);
     if (await this.claims.findOne({ _id: contestKey(domain, id) })) throw new ImportError(409, '这场比赛已经确认过正式代码，只能在原批次查看或继续');
     if (await this.jobs.countDocuments({ actor, state: 'preview', createdAt: { $gt: new Date(Date.now() - LIMITS.previewMs) } }) >= 5) throw new ImportError(429, '最多保留 5 个有效预览，请先取消不需要的批次');
-    const input = applyUploadLanguage(applyFolderMapping(await readArchive(bytes),contest,mapping),language);
+    const archive = await readArchive(bytes);
+    const input = applyUploadLanguage(applyFolderMapping(archive,contest,mapping),language);
     const resolved = await this.gateway.resolve(contest, input);
     await this.gateway.participants?.(actor, domain, id, [...new Set(resolved.map(r=>r.uid).filter(uid=>uid>0))]);
     const now = new Date(), job: Job = {
@@ -44,7 +45,7 @@ export class ImportService {
       fingerprint: contest.fingerprint,
       digest: createHash('sha256').update(JSON.stringify(resolved.map(r => [r.uid, r.problem, r.file, r.language, r.hash]))).digest('hex'),
       state: 'preview', revision: 1, count: resolved.length, createdAt: now, updatedAt: now,
-      expiresAt: new Date(now.getTime() + LIMITS.previewMs), error: '',
+      expiresAt: new Date(now.getTime() + LIMITS.previewMs), error: '', ignoredFiles: archive.ignoredFiles,
     };
     await this.rows.insertMany(resolved.map((r, i) => ({ ...r, _id: `${job._id}:${i}`, jobId: job._id, domainId: domain, contestId: id, state: 'pending' as const })));
     try { await this.jobs.insertOne(job); } catch (e) { await this.rows.deleteMany({ jobId: job._id }); throw e; }
@@ -66,7 +67,7 @@ export class ImportService {
       output.push({ contestantName:r.contestantName,problemFolder:r.problemFolder,line: r.line, uid: r.uid, username: r.username, problem: r.problem, pid: r.pid, file: r.file, language: r.language, bytes: Buffer.byteLength(r.code), hash: r.hash, errors: r.errors, state: r.state, rid: r.pid && r.state !== 'pending' ? String(r.rid) : null, result });
     }
     const canResume = ['interrupted', 'attention'].includes(job.state) || (job.state === 'confirming' && Date.now() - job.updatedAt.getTime() >= 120_000) || (job.state === 'running' && !!job.heartbeat && Date.now() - job.heartbeat.getTime() >= 120_000);
-    return { canResume, id: String(job._id), contestId: job.contestId, title: job.title, actor: job.actor, state: job.state, revision: job.revision, error: job.error, createdAt: job.createdAt, expiresAt: job.expiresAt, participants: new Set(rows.map(r => r.uid)).size, rows: output };
+    return { canResume, ignoredFiles: job.ignoredFiles ?? [], id: String(job._id), contestId: job.contestId, title: job.title, actor: job.actor, state: job.state, revision: job.revision, error: job.error, createdAt: job.createdAt, expiresAt: job.expiresAt, participants: new Set(rows.map(r => r.uid)).size, rows: output };
   }
   async history(actor: number, domain: string, id: string) {
     await this.permit(actor, domain);

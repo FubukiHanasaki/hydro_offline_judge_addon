@@ -81,6 +81,8 @@
     for (const [title, value] of [['参赛选手', batch.participants], ['代码文件', submitted.length], ['已完成评测', done], ['检查错误', batch.rows.filter(r => r.errors.length).length]]) {
       const div = node('div', title, 'oj-stat'); div.append(node('strong', String(value))); $('summary').append(div);
     }
+    let ignored=$('ignored-files');if(!ignored){ignored=node('details');ignored.id='oj-ignored-files';$('summary').after(ignored);}ignored.replaceChildren();ignored.hidden=!batch.ignoredFiles?.length;
+    if(batch.ignoredFiles?.length){ignored.append(node('summary',`已忽略 ${batch.ignoredFiles.length} 个文件`));const list=node('ul');for(const path of batch.ignoredFiles)list.append(node('li',path));ignored.append(list);}
     $('rows').replaceChildren(); $('mobile-rows').replaceChildren();
     for (const row of batch.rows) {
       const tr = node('tr'), user = node('td', row.username); user.append(node('small', row.uid>0?`UID ${row.uid}`:'未匹配 UID'));

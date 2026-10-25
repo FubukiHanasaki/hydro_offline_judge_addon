@@ -14,7 +14,7 @@ export interface Job {
   _id: ObjectId; domainId: string; contestId: string; title: string; actor: number;
   fingerprint: string; digest: string; state: JobState; revision: number; count: number;
   createdAt: Date; updatedAt: Date; expiresAt: Date; error: string;
-  token?: string; heartbeat?: Date;
+  token?: string; heartbeat?: Date; ignoredFiles?: string[];
 }
 export interface Row extends StoredRow { _id: string; jobId: ObjectId; domainId: string; contestId: string; }
 export interface Gateway {

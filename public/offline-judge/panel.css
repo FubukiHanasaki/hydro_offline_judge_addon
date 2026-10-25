@@ -55,3 +55,7 @@
 
 #offline-app .oj-language-field { flex:1 1 220px; }
 #offline-app .oj-language-field .select { min-height:38px; }
+
+#oj-ignored-files { margin: 12px 0; }
+#oj-ignored-files summary { cursor: pointer; }
+#oj-ignored-files ul { max-height: 180px; overflow: auto; overflow-wrap: anywhere; margin: 8px 0; padding-left: 24px; }
