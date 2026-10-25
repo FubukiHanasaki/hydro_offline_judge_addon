@@ -108,9 +108,13 @@ export class HydroGateway implements Gateway {
     const tid = new ObjectId(job.contestId);
     let status = await ContestModel.getStatus(job.domainId, tid, row.uid);
     if (!status?.attend) {
+      // Authorized package imports enroll through the model: invitation codes
+      // belong to self-registration and must not block this bulk operation.
       try { await ContestModel.attend(job.domainId, tid, row.uid); }
       catch (e) { if (!(await ContestModel.getStatus(job.domainId, tid, row.uid))?.attend) throw e; }
     }
+    status = await ContestModel.getStatus(job.domainId, tid, row.uid);
+    if (!status?.attend) throw new ImportError(409, `UID ${row.uid} 登记参赛失败，已停止导入`);
     await ContestModel.setStatus(job.domainId, tid, row.uid, { startAt: (await ContestModel.get(job.domainId, tid)).beginAt, offlineImport: String(job._id) });
     if (!row.pid) return;
     const old = await RecordModel.get(job.domainId, row.rid);
