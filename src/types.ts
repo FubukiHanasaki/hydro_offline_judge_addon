@@ -20,7 +20,8 @@ export interface Row extends StoredRow { _id: string; jobId: ObjectId; domainId:
 export interface Gateway {
   contest(domain: string, id: string): Promise<Contest>;
   resolve(contest: Contest, rows: InputRow[], ownJob?: string): Promise<ResolvedRow[]>;
-  authorize(actor: number, domain: string): Promise<boolean>;
+  authorize(actor: number, domain: string, contestId?: string): Promise<boolean>;
+  participants?(actor: number, domain: string, id: string, uids: number[]): Promise<void>;
   register(job: Job, row: Row): Promise<void>;
   dispatch(job: Job, row: Row): Promise<void>;
   result(job: Job, row: Row): Promise<{ status: number | null; score: number | null; terminal: boolean; queued: boolean; }>;

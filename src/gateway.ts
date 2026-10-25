@@ -5,9 +5,24 @@ import { ContestModel, ProblemModel, RecordModel, UserModel, SettingModel, Syste
 import { ImportError, LIMITS, type Contest, type Gateway, type InputRow, type Job, type Row } from './types';
 export class HydroGateway implements Gateway {
   constructor(readonly db: Db) {}
-  async authorize(actor: number, domain: string) {
+  async authorize(actor: number, domain: string, contestId?: string) {
     const user = await UserModel.getById(domain, actor);
-    return actor > 0 && user?._id === actor && user.hasPriv(PRIV.PRIV_USER_PROFILE) && user.hasPerm(PERM.PERM_EDIT_CONTEST);
+    if (!(actor > 0 && user?._id === actor && user.hasPriv(PRIV.PRIV_USER_PROFILE) && user.hasPerm(PERM.PERM_VIEW_CONTEST))) return false;
+    const bridge = (globalThis as any)[Symbol.for('hydro.sms.exams')];
+    if (contestId) {
+      const managed = await this.db.collection('sms_exams').findOne({ _id: `${domain}:${contestId}` as any });
+      if (managed) return bridge ? await bridge.authorize(actor, domain, contestId) === true : false;
+      return user.hasPerm(PERM.PERM_EDIT_CONTEST);
+    }
+    return user.hasPerm(PERM.PERM_EDIT_CONTEST) || !!bridge && await bridge.authorize(actor, domain) === true;
+  }
+  async participants(actor: number, domain: string, id: string, uids: number[]) {
+    const managed = await this.db.collection('sms_exams').findOne({ _id: `${domain}:${id}` as any });
+    if (!managed) return;
+    const bridge = (globalThis as any)[Symbol.for('hydro.sms.exams')];
+    if (!bridge) throw new ImportError(403, 'SMS 模拟赛鉴权不可用');
+    try { await bridge.participants(actor, domain, id, uids); }
+    catch { throw new ImportError(403, '没有对应班级权限或代码包包含班外账号'); }
   }
   async problem(domain: string, pid: number) {
     const p = await ProblemModel.get(domain, pid);
@@ -22,12 +37,19 @@ export class HydroGateway implements Gateway {
     if (!t || t.domainId !== domain) throw new ImportError(404, '当前子域中没有这场比赛');
     if (t.rule !== 'oi') throw new ImportError(409, '仅支持 OI 比赛');
     if (!(t.endAt instanceof Date) || t.endAt > new Date()) throw new ImportError(409, '正式代码需要在比赛结束后导入');
-    if (t.duration || t.assign?.length) throw new ImportError(409, '首版不支持个人计时或分组限定的比赛');
+    if (t.duration || t.allowTeam || t.assign?.length) throw new ImportError(409, '暂不支持个人计时、团队或分组限定的比赛');
     if (t.lockAt && !t.unlocked) throw new ImportError(409, '请先解除比赛封榜');
     if (!t.pids?.length || t.pids.length > 100) throw new ImportError(409, '比赛需要包含 1–100 道题目');
     const claim = await this.db.collection('offline_judge_contests').findOne({ _id: `${domain}:${id}` as any });
     if (await this.db.collection('record').findOne({ domainId: domain, contest: new ObjectId(id), 'offlineImport.jobId': { $ne: claim ? String(claim.jobId) : '' } }, { projection: { _id: 1 } })) throw new ImportError(409, '比赛已有其他正式提交，请使用专门的离线 OI 比赛');
-    if (claim?.state !== 'complete' && await this.db.collection('sms_rating_contests').findOne({ _id: `${domain}:${id}` as any, enabled: true })) throw new ImportError(409, '请先关闭这场比赛的 Rating 计分，待导入评测完成后再启用');
+    if (claim?.state !== 'complete') {
+      const bridge=(globalThis as any)[Symbol.for('hydro.sms.exams')];
+      const config=await this.db.collection('sms_rating_contests').findOne({_id:`${domain}:${id}` as any});
+      const head=await this.db.collection('sms_rating_head').findOne({_id:'global' as any});
+      const published=head&&await this.db.collection('sms_rating_sources').findOne({generation:head.generation,key:`contest:${domain}:${id}`});
+      if(published)throw new ImportError(409,'比赛已有核验评分，请先由管理员撤销本场评分并核验，再导入正式代码');
+      if(config?.enabled&&!(bridge?.reviewRequired&&await bridge.managed(domain,id)))throw new ImportError(409,'请先关闭这场比赛的 Rating 计分，待导入评测完成后再启用');
+    }
     const d = await this.db.collection('domain').findOne({ _id: domain as any });
     if (!d) throw new ImportError(404, '子域不存在');
     const problems = [];

@@ -10,6 +10,7 @@ export const inject = ['db'];
 export async function apply(ctx: Context) {
   const db = ctx.db.db, gateway = new HydroGateway(db), service = new ImportService(db, gateway);
   await service.init();
+  ctx.effect(()=>{const key=Symbol.for('hydro.offline-judge');const marker={installed:true};(globalThis as any)[key]=marker;return()=>{if((globalThis as any)[key]===marker)delete(globalThis as any)[key];};});
   let parsing = 0;
   class Api extends Handler {
     async prepare() {
@@ -42,7 +43,7 @@ export async function apply(ctx: Context) {
   class Contests extends Api {
     async get() { await this.run(async () => {
       const contests = await db.collection('document').find({ domainId: this.domain._id, docType: 30, rule: 'oi', endAt: { $lte: new Date() } }, { projection: { docId: 1, title: 1, beginAt: 1, endAt: 1 } }).sort({ endAt: -1 }).limit(200).toArray();
-      return contests.map(t => ({ id: String(t.docId), title: t.title, endAt: t.endAt }));
+      const allowed=[];for(const t of contests)if(await gateway.authorize(this.user._id,this.domain._id,String(t.docId)))allowed.push({id:String(t.docId),title:t.title,endAt:t.endAt});return allowed;
     }); }
   }
   class Competition extends Api {
@@ -91,6 +92,8 @@ export async function apply(ctx: Context) {
   ctx.on('handler/before-prepare/ProblemSubmit', async (h: any) => {
     const tid = String(h.args.tid || '');
     if (!/^[a-f\d]{24}$/i.test(tid)) return;
+    const sms=(globalThis as any)[Symbol.for('hydro.sms.exams')];
+    if(sms&&await sms.managed(h.domain._id,tid))return;
     const claim = await service.claims.findOne({ _id: `${h.domain._id}:${tid}` });
     if (!claim) return;
     h.args.domainId = h.domain._id;

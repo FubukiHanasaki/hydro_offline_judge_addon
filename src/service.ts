@@ -20,21 +20,22 @@ export class ImportService {
     await this.audit.createIndex({ domainId: 1, at: -1 });
   }
   private id(value: string) { if (!/^[a-f\d]{24}$/i.test(value)) throw new ImportError(400, '批次 ID 无效'); return new ObjectId(value); }
-  private async permit(actor: number, domain: string) {
-    if (!await this.gateway.authorize(actor, domain)) throw new ImportError(403, '需要当前子域的比赛管理权限');
+  private async permit(actor: number, domain: string, contestId?: string) {
+    if (!await this.gateway.authorize(actor, domain, contestId)) throw new ImportError(403, '需要当前子域的比赛管理权限');
   }
   async competition(actor: number, domain: string, id: string) {
-    await this.permit(actor, domain);
+    await this.permit(actor, domain, id);
     const contest = await this.gateway.contest(domain, id);
     const claim = await this.claims.findOne({ _id: contestKey(domain, id) });
     return { ...contest, formalBatch: claim ? { id: String(claim.jobId), state: claim.state } : null };
   }
   async preview(actor: number, domain: string, id: string, bytes: Uint8Array) {
-    await this.permit(actor, domain);
+    await this.permit(actor, domain, id);
     const contest = await this.gateway.contest(domain, id);
     if (await this.claims.findOne({ _id: contestKey(domain, id) })) throw new ImportError(409, '这场比赛已经确认过正式代码，只能在原批次查看或继续');
     if (await this.jobs.countDocuments({ actor, state: 'preview', createdAt: { $gt: new Date(Date.now() - LIMITS.previewMs) } }) >= 5) throw new ImportError(429, '最多保留 5 个有效预览，请先取消不需要的批次');
     const input = await readArchive(bytes);
+    await this.gateway.participants?.(actor, domain, id, [...new Set(input.map(r=>r.uid))]);
     const resolved = await this.gateway.resolve(contest, input);
     const now = new Date(), job: Job = {
       _id: new ObjectId(), domainId: domain, contestId: id, title: contest.title, actor,
@@ -51,6 +52,7 @@ export class ImportService {
     await this.permit(actor, domain);
     const job = await this.jobs.findOne({ _id: this.id(id), domainId: domain });
     if (!job) throw new ImportError(404, '批次不存在');
+    await this.permit(actor, domain, job.contestId);
     return job;
   }
   async view(actor: number, domain: string, id: string) {
@@ -67,6 +69,7 @@ export class ImportService {
   async history(actor: number, domain: string, id: string) {
     await this.permit(actor, domain);
     if (!/^[a-f\d]{24}$/i.test(id)) throw new ImportError(400, '比赛 ID 无效');
+    await this.permit(actor, domain, id);
     return (await this.jobs.find({ domainId: domain, contestId: id }).sort({ createdAt: -1 }).limit(30).toArray()).map(j => ({ id: String(j._id), state: j.state, count: j.count, createdAt: j.createdAt, actor: j.actor }));
   }
   async confirm(actor: number, domain: string, id: string, revision: number) {
@@ -77,6 +80,7 @@ export class ImportService {
     if (contest.fingerprint !== job.fingerprint) throw new ImportError(409, '比赛、题目或语言配置已变化，请重新预览');
     const rows = await this.rows.find({ jobId: job._id }).sort({ line: 1 }).toArray();
     if (rows.length !== job.count || rows.some(r => r.errors.length)) throw new ImportError(409, '预览存在错误，不能确认');
+    await this.gateway.participants?.(actor, domain, job.contestId, [...new Set(rows.map(r=>r.uid))]);
     const rechecked = await this.gateway.resolve(contest, rows);
     if (rechecked.some(r => r.errors.length)) throw new ImportError(409, '账号、成员关系或已有提交已变化，请重新预览');
     const locked = await this.jobs.updateOne({ _id: job._id, state: 'preview', revision }, { $set: { state: 'confirming', updatedAt: new Date() }, $inc: { revision: 1 } });
@@ -118,7 +122,8 @@ export class ImportService {
     return this.view(actor, domain, id);
   }
   private async checkpoint(job: Job, token: string): Promise<Contest> {
-    if (!await this.gateway.authorize(job.actor, job.domainId)) throw new ImportError(403, '操作人的比赛管理权限已失效');
+    if (!await this.gateway.authorize(job.actor, job.domainId, job.contestId)) throw new ImportError(403, '操作人的比赛管理权限已失效');
+    await this.gateway.participants?.(job.actor, job.domainId, job.contestId, (await this.rows.find({jobId:job._id}).project({uid:1}).toArray()).map(r=>r.uid));
     const contest = await this.gateway.contest(job.domainId, job.contestId);
     if (contest.fingerprint !== job.fingerprint) throw new ImportError(409, '比赛配置变化，批次已暂停');
     const lock = await this.jobs.updateOne({ _id: job._id, state: 'running', token }, { $set: { heartbeat: new Date(), updatedAt: new Date() } });
