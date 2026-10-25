@@ -11,11 +11,14 @@ export const inject = ['db'];
 export async function apply(ctx: Context) {
   const db = ctx.db.db, gateway = new HydroGateway(db), service = new ImportService(db, gateway);
   await service.init();
-  installCorrectionRecords(ctx, 'offlineCorrection', async (h, _record, id) => {
+  installCorrectionRecords(ctx, 'offlineCorrection', async (h, record, id) => {
     const claim = await service.claims.findOne({ _id: `${h.domain._id}:${id}`, state: 'complete' });
     if (!claim) return null;
     const managed = await db.collection('sms_exams').findOne({ _id: `${h.domain._id}:${id}` as any });
-    if (managed) return null;
+    if (managed) {
+      const bridge = (globalThis as any)[Symbol.for('hydro.sms.exams')];
+      return bridge?.correctionRecord ? bridge.correctionRecord(h.user._id, h.domain._id, id, record.uid) : null;
+    }
     const contest = await ContestModel.get(h.domain._id, new ObjectId(id));
     return contest?.rule === 'oi' ? contest : null;
   });
