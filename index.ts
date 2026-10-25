@@ -1,15 +1,24 @@
 // Copyright (C) 2026 FubukiHanasaki. AGPL-3.0-or-later.
 import { readFile, stat } from 'node:fs/promises';
 import { ObjectId } from 'mongodb';
-import { Context, Handler, ForbiddenError, PERM, RecordModel, SettingModel } from 'hydrooj';
+import { Context, Handler, ForbiddenError, PERM, RecordModel, SettingModel, ContestModel } from 'hydrooj';
 import { HydroGateway } from './src/gateway';
 import { ImportService } from './src/service';
 import { ImportError, LIMITS } from './src/types';
+import { installCorrectionRecords } from './src/correction-records';
 export const name = 'hydro-offline-judge';
 export const inject = ['db'];
 export async function apply(ctx: Context) {
   const db = ctx.db.db, gateway = new HydroGateway(db), service = new ImportService(db, gateway);
   await service.init();
+  installCorrectionRecords(ctx, 'offlineCorrection', async (h, _record, id) => {
+    const claim = await service.claims.findOne({ _id: `${h.domain._id}:${id}`, state: 'complete' });
+    if (!claim) return null;
+    const managed = await db.collection('sms_exams').findOne({ _id: `${h.domain._id}:${id}` as any });
+    if (managed) return null;
+    const contest = await ContestModel.get(h.domain._id, new ObjectId(id));
+    return contest?.rule === 'oi' ? contest : null;
+  });
   ctx.effect(()=>{const key=Symbol.for('hydro.offline-judge');const marker={installed:true};(globalThis as any)[key]=marker;return()=>{if((globalThis as any)[key]===marker)delete(globalThis as any)[key];};});
   let parsing = 0;
   class Api extends Handler {
