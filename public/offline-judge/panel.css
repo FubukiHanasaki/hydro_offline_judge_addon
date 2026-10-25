@@ -44,3 +44,10 @@
 .oj-import-dialog .button:disabled { background:#eee; border-color:#ddd; cursor:not-allowed; }
 .oj-import-dialog input::placeholder { color:#000; opacity:1; }
 #offline-app td small,#offline-app .oj-mobile-card small { font-size:14px; }
+
+.oj-match-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 20px; }
+.oj-match-grid label { display:flex; flex-direction:column; gap:6px; min-width:0; overflow-wrap:anywhere; }
+.oj-match-grid input,.oj-match-grid select { width:100%; margin:0; }
+#oj-mapping { padding:16px 0; border-bottom:1px solid #ddd; margin-bottom:16px; }
+#oj-mapping>.button { margin:14px 0 0; }
+@media(max-width:640px) { .oj-match-grid { grid-template-columns:minmax(0,1fr); } }

@@ -9,7 +9,7 @@
   const base = app.dataset.api, prefix = base.slice(0, base.indexOf('/offline-judge/'));
   const labels = { preview: '待确认', confirming: '正在确认', queued: '等待导入', running: '正在导入', interrupted: '导入中断', attention: '需要检查', judging: '正在评测', complete: '评测完成', cancelled: '已取消', expired: '已过期' };
   const statuses = { 0: '等待评测', 1: '通过', 2: '答案错误', 3: '超时', 4: '内存超限', 5: '输出超限', 6: '运行错误', 7: '编译错误', 8: '系统错误，需重测', 9: '已取消，需重测', 20: '正在评测', 21: '正在编译', 22: '已领取任务' };
-  let competition = null, batch = null, serial = 0, timer = null, busy = false;
+  let competition = null, batch = null, serial = 0, timer = null, busy = false, uploadedFile = null, mappingDirty = false;
   function node(tag, text, cls) { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; }
   function notice(message = '') { $('notice').textContent = message; $('notice').hidden = !message; }
   async function api(url, body) {
@@ -28,9 +28,10 @@
     $('file').disabled = busy || !valid;
     $('contest').disabled = busy;
     $('refresh').disabled = busy;
+    $('mapping').querySelectorAll('input,select,button').forEach(el=>el.disabled=busy||!uploadedFile);
     const preview = batch?.state === 'preview';
     $('confirm').hidden = !preview; $('cancel').hidden = !preview; $('consent-wrap').hidden = !preview;
-    $('confirm').disabled = busy || !$('consent').checked || batch?.rows.some(r => r.errors.length);
+    $('confirm').disabled = busy || mappingDirty || !$('consent').checked || batch?.rows.some(r => r.errors.length);
     $('cancel').disabled = busy;
     $('resume').hidden = !batch?.canResume;
     $('actions').hidden = !preview && $('resume').hidden;
@@ -69,7 +70,7 @@
   }
   function drawBatch(value) {
     const previous = batch?.id;
-    batch = value; if (previous !== value.id) $('consent').checked = false;
+    batch = value; mappingDirty = false; if (previous !== value.id) $('consent').checked = false;
     $('preview-section').hidden = false;
     $('batch-title').textContent = batch.state === 'preview' ? '导入前预览' : '正式导入批次';
     $('state').textContent = labels[batch.state] || batch.state;
@@ -81,8 +82,8 @@
     }
     $('rows').replaceChildren(); $('mobile-rows').replaceChildren();
     for (const row of batch.rows) {
-      const tr = node('tr'), user = node('td', row.username); user.append(node('small', `UID ${row.uid}`));
-      const problem = node('td', row.problem ? `${row.problem} · ${row.pid || '未匹配'}` : '仅登记参赛'); problem.append(node('small', row.file || '未提交代码'));
+      const tr = node('tr'), user = node('td', row.username); user.append(node('small', row.uid>0?`UID ${row.uid}`:'未匹配 UID'));
+      const problem = node('td', row.problemFolder ? `${row.problemFolder} · ${row.pid || '未匹配'}` : row.problem ? `${row.problem} · ${row.pid || '未匹配'}` : '仅登记参赛'); problem.append(node('small', row.file || '未提交代码'));
       const check = node('td');
       if (row.errors.length) check.append(node('span', row.errors.join('；'), 'oj-error'));
       else if (!row.pid) check.append(node('span', batch.state === 'preview' ? '将登记参赛' : '已登记参赛'));
@@ -101,7 +102,25 @@
       foot.append(node('span', row.language ? `语言：${row.language}` : '无代码'), state);
       card.append(head, file, foot); $('mobile-rows').append(card);
     }
-    controls();
+    drawMapping();controls();
+  }
+  function drawMapping() {
+    const box=$('mapping');box.replaceChildren();
+    const folderRows=batch?.rows.filter(r=>r.contestantName)||[];
+    box.hidden=!folderRows.length||batch.state!=='preview';if(box.hidden)return;
+    const grid=node('div',undefined,'oj-match-grid');
+    function changed(){mappingDirty=true;$('consent').checked=false;controls();}
+    for(const name of new Set(folderRows.map(r=>r.contestantName))){const row=folderRows.find(r=>r.contestantName===name),label=node('label',name),input=node('input');input.type='number';input.min='1';input.step='1';input.className='textbox';input.placeholder='Hydro UID';input.dataset.person=name;input.value=row.uid>0?String(row.uid):'';input.addEventListener('input',changed);label.append(input);grid.append(label);}
+    for(const name of new Set(folderRows.map(r=>r.problemFolder).filter(Boolean))){const row=folderRows.find(r=>r.problemFolder===name),label=node('label',name),select=node('select',undefined,'select'),empty=node('option','选择比赛题目');empty.value='';select.append(empty);select.dataset.problem=name;for(const p of competition.problems||[]){const o=node('option',`${p.label} · ${p.title}`);o.value=String(p.pid);select.append(o);}select.value=row.pid?String(row.pid):'';select.addEventListener('change',changed);label.append(select);grid.append(label);}
+    const apply=node('button','应用匹配','rounded button');apply.type='button';apply.disabled=!uploadedFile||busy;apply.addEventListener('click',async()=>{
+      if(busy||!uploadedFile)return;const people=Object.create(null),problems=Object.create(null);
+      for(const el of box.querySelectorAll('[data-person]')){const uid=Number(el.value);if(!Number.isSafeInteger(uid)||uid<=0){notice('请为每名选手填写有效 UID');return;}people[el.dataset.person]=uid;}
+      for(const el of box.querySelectorAll('[data-problem]')){if(!el.value){notice('请选择每个目录对应的比赛题目');return;}problems[el.dataset.problem]=Number(el.value);}
+      busy=true;controls();apply.disabled=true;notice();
+      try {const old=batch;if(old.state==='preview'){await api(`${app.dataset.batches}/${encodeURIComponent(old.id)}`,{action:'cancel',revision:old.revision});old.state='cancelled';}mappingDirty=true;const data=new FormData();data.append('file',uploadedFile);data.append('mapping',JSON.stringify({people,problems}));const value=await api(`${base}/${encodeURIComponent(competition.id)}`,data);drawBatch(value);}
+      catch(e){notice(e.message);}
+      finally{busy=false;apply.disabled=false;controls();}
+    });box.append(grid,apply);
   }
   async function openBatch(id) {
     const version = serial, contestId = $('contest').value;
@@ -120,7 +139,7 @@
   }
   async function action(operation) {
     if (!batch || busy) return;
-    if (operation === 'confirm' && (!$('consent').checked || batch.rows.some(r => r.errors.length))) return;
+    if (operation === 'confirm' && (mappingDirty || !$('consent').checked || batch.rows.some(r => r.errors.length))) return;
     busy = true; controls(); notice();
     try {
       const value = await api(`${app.dataset.batches}/${encodeURIComponent(batch.id)}`, { action: operation, revision: batch.revision });
@@ -133,7 +152,7 @@
   }
   $('upload').addEventListener('submit', async e => {
     e.preventDefault(); if (busy || !competition || competition.formalBatch) return;
-    const file = $('file').files[0]; if (!file) return;
+    const file = $('file').files[0]; if (!file) return; uploadedFile = file;
     if (file.size > 10 * 1024 * 1024) { notice('ZIP 不能超过 10 MB'); return; }
     busy = true; controls(); notice();
     const version = serial;
@@ -148,11 +167,6 @@
   $('contest').addEventListener('change', loadCompetition);
   $('refresh').addEventListener('click', loadCompetition);
   $('format').addEventListener('click', () => { const expanded = $('format-body').hidden; $('format-body').hidden = !expanded; $('format').setAttribute('aria-expanded', String(expanded)); });
-  $('manifest').addEventListener('click', () => {
-    const lang = competition?.languages.find(l => l.id === 'cc.cc17o2')?.id || competition?.languages[0]?.id || '服务器语言ID';
-    const blob = new Blob(['\ufeffuid,problem,file,language\r\n', `246,A,code/246/A.cpp,${lang}\r\n247,,,\r\n`], { type: 'text/csv;charset=utf-8' });
-    const a = node('a'); a.download = 'submissions.csv'; a.href = URL.createObjectURL(blob); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  });
   window.addEventListener('pagehide', () => clearTimeout(timer));
   async function openImporter() {
     if (!dialog || dialog.open) return;

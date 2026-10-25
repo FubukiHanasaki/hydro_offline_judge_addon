@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { ObjectId, type Db } from 'mongodb';
 import { ContestModel, ProblemModel, RecordModel, UserModel, SettingModel, SystemModel, PERM, PRIV, STATUS } from 'hydrooj';
 import { ImportError, LIMITS, type Contest, type Gateway, type InputRow, type Job, type Row } from './types';
+import { folderLanguage } from './folders';
 export class HydroGateway implements Gateway {
   constructor(readonly db: Db) {}
   async authorize(actor: number, domain: string, contestId?: string) {
@@ -62,12 +63,23 @@ export class HydroGateway implements Gateway {
     const result = [];
     const d = await this.db.collection('domain').findOne({ _id: contest.domainId as any });
     const t = await ContestModel.get(contest.domainId, new ObjectId(contest.id));
-    for (const row of rows) {
-      const errors: string[] = [];
+    const nameCache=new Map<string,number[]>(),problemAliases=new Map<string,number[]>();
+    if(rows.some(r=>r.problemFolder&&!r.manualProblem))for(const pid of contest.pids){const {p,effective}=await this.problem(contest.domainId,pid);for(const value of new Set([p.pid,p.title,effective.config.filename].filter(v=>typeof v==='string'&&/^[A-Za-z][A-Za-z0-9_-]*$/.test(v)).map(v=>v.toLowerCase()))){problemAliases.set(value,[...(problemAliases.get(value)||[]),pid]);}}
+    for (const original of rows) {
+      const row={...original};const errors: string[] = [];
+      if(row.contestantName&&!row.manualUid){
+        let ids=nameCache.get(row.contestantName);
+        if(!ids){const users=await this.db.collection('user').find({$or:[{unameLower:row.contestantName.toLowerCase()},{uname:row.contestantName},{displayName:row.contestantName}]},{projection:{_id:1}}).toArray();const students=await this.db.collection('sms_students').find({'basic.name':row.contestantName,hydroUid:{$gt:0}},{projection:{hydroUid:1}}).toArray();let candidates=[...new Set([...users.map(u=>u._id as unknown as number),...students.map(s=>s.hydroUid as number)])];if(contest.domainId!=='system')candidates=await this.db.collection('domain.user').distinct('uid',{domainId:contest.domainId,join:true,uid:{$in:candidates}});ids=candidates;nameCache.set(row.contestantName,ids);}
+        if(ids.length!==1){row.uid=0;errors.push(ids.length?'姓名对应多个账号，请指定 UID':'姓名未匹配到当前子域账号，请指定 UID');}
+        else if(row.uid>0&&row.uid!==ids[0])errors.push('姓名对应账号已变化，请重新预览');else row.uid=ids[0];
+      }
+      if(row.problemFolder&&!row.manualProblem){const matches=problemAliases.get(row.problemFolder.toLowerCase())||[];if(matches.length!==1){row.problem='';errors.push(matches.length?'题目英文名不唯一，请指定题目':'题目英文名未匹配，请指定题目');}else{row.problem=String(matches[0]);if('pid'in original&&original.pid&&original.pid!==matches[0])errors.push('题目匹配已变化，请重新预览');}}
+      if(row.contestantName&&row.file){row.language=folderLanguage(/\.([^.]+)$/.exec(row.file)?.[1].toLowerCase().replace(/^(cc|cxx)$/,'cpp').replace(/^py$/,'py3')||'',SettingModel.langs);}
+
       const u = await this.db.collection('user').findOne({ _id: row.uid as any }, { projection: { _id: 1, uname: 1, priv: 1 } });
       if (!u || !((u.priv & PRIV.PRIV_USER_PROFILE) === PRIV.PRIV_USER_PROFILE)) errors.push('账号不存在或已停用');
       const member = await this.db.collection('domain.user').findOne({ domainId: contest.domainId, uid: row.uid, join: true });
-      if (!member) errors.push('账号尚未加入当前子域');
+      if (!member&&contest.domainId!=='system') errors.push('账号尚未加入当前子域');
       let pid = 0;
       if (row.problem) {
         let index = 0;
@@ -88,7 +100,7 @@ export class HydroGateway implements Gateway {
         }
         if (Buffer.byteLength(row.code) > Math.min(LIMITS.code, SystemModel.get('limit.codelength') || LIMITS.code)) errors.push('代码超过服务器限制');
       }
-      result.push({ ...row, pid, username: u?.uname || `UID ${row.uid}`, errors, rid: new ObjectId() });
+      result.push({ ...row, pid, username: row.uid>0 ? u?.uname || `UID ${row.uid}` : row.contestantName || '未匹配', errors, rid: new ObjectId() });
     }
     return result;
   }

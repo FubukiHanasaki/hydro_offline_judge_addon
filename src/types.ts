@@ -4,7 +4,7 @@ export class ImportError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 export const LIMITS = Object.freeze({ zip: 10 * 1024 * 1024, expanded: 20 * 1024 * 1024, code: 128 * 1024, manifest: 256 * 1024, rows: 500, entries: 1500, previewMs: 24 * 3600_000 });
-export interface InputRow { line: number; uid: number; problem: string; file: string; language: string; code: string; hash: string; }
+export interface InputRow { contestantName?: string; problemFolder?: string; manualUid?: boolean; manualProblem?: boolean; line: number; uid: number; problem: string; file: string; language: string; code: string; hash: string; }
 export interface Contest { id: string; title: string; domainId: string; rule: string; beginAt: Date; endAt: Date; pids: number[]; fingerprint: string; }
 export interface ResolvedRow extends InputRow { pid: number; username: string; errors: string[]; rid: ObjectId; }
 export type RowState = 'pending' | 'registered' | 'dispatching' | 'queued';

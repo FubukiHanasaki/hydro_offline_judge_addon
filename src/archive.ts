@@ -19,13 +19,14 @@ function text(bytes: Uint8Array, name: string): string {
 }
 export async function readArchive(bytes: Uint8Array): Promise<InputRow[]> {
   if (!bytes.length || bytes.length > LIMITS.zip) bad('ZIP 必须为 1 字节至 10 MB');
-  const reader = new ZipReader(new Uint8ArrayReader(bytes), { useWebWorkers: false });
+  const reader = new ZipReader(new Uint8ArrayReader(bytes), { useWebWorkers: false, filenameEncoding: 'gb18030' });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20_000);
   let expanded = 0;
   try {
     const files = new Map<string, FileEntry>();
     const names = new Set<string>();
+    const directories: string[] = [];
     let count = 0, declared = 0;
     for await (const entry of reader.getEntriesGenerator()) {
       if (++count > LIMITS.entries) bad('ZIP 条目过多');
@@ -36,7 +37,7 @@ export async function readArchive(bytes: Uint8Array): Promise<InputRow[]> {
       const mode = (entry.externalFileAttributes >>> 16) & 0xf000;
       if (mode && mode !== 0x8000 && mode !== 0x4000) bad('ZIP 不允许链接或特殊文件');
       if (entry.encrypted) bad('不支持加密 ZIP');
-      if (entry.directory) continue;
+      if (entry.directory) { directories.push(name); continue; }
       if (!Number.isSafeInteger(entry.uncompressedSize) || entry.uncompressedSize < 0) bad('ZIP 文件大小无效');
       const limit = name === 'submissions.csv' ? LIMITS.manifest : LIMITS.code;
       if (entry.uncompressedSize > limit) bad(`${name} 超出大小限制`);
@@ -62,7 +63,26 @@ export async function readArchive(bytes: Uint8Array): Promise<InputRow[]> {
       return result;
     }
     const manifest = files.get('submissions.csv');
-    if (!manifest) bad('ZIP 根目录缺少 submissions.csv');
+    if (!manifest) {
+      const paths=[...files.keys()];
+      if(!paths.length)bad('代码包中没有代码文件');
+      const wrapped=paths.every(p=>p.split('/').length===4&&p.startsWith('src/'));
+      const rows:InputRow[]=[];const people=new Set<string>();
+      const extensions:Record<string,string>={cpp:'cpp',cc:'cpp',cxx:'cpp',c:'c',pas:'pas',py:'py3',java:'java',rs:'rs'};
+      for(const path of paths){
+        const parts=path.split('/');if(wrapped)parts.shift();
+        if(parts.length!==3)bad('目录必须为 姓名/题目英文名/代码文件，可在最外层套一层 src');
+        const [person,problem,file]=parts;const ext=file.split('.').pop()!.toLowerCase();
+        if(!/^[A-Za-z][A-Za-z0-9_-]{0,79}$/.test(problem))bad('题目目录需要使用英文名');
+        if(!Object.hasOwn(extensions,ext))bad(`${path} 不是支持的源代码文件`);
+        const code=text(await read(files.get(path)!,LIMITS.code),path);if(!code.trim())bad(`${path} 代码为空`);
+        rows.push({line:rows.length+1,uid:0,contestantName:person,problemFolder:problem,problem,language:extensions[ext],file:path,code,hash:createHash('sha256').update(code).digest('hex')});people.add(person);
+        if(rows.length>LIMITS.rows)bad('每批最多500条提交');
+      }
+      for(const path of directories){const parts=path.split('/');if(wrapped){if(parts[0]!=='src')bad('代码包的 src 目录结构不一致');parts.shift();}if(parts.length===1&&parts[0]&&!people.has(parts[0])){people.add(parts[0]);rows.push({line:rows.length+1,uid:0,contestantName:parts[0],problem:'',file:'',language:'',code:'',hash:''});}}
+      if(rows.length>LIMITS.rows)bad('每批最多500条提交');
+      return rows;
+    }
     const csv = text(await read(manifest!, LIMITS.manifest), 'submissions.csv');
     let records: string[][];
     try { records = parse(csv, { bom: true, skip_empty_lines: true, max_record_size: 4096, relax_column_count: false }); }

@@ -2,6 +2,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { ObjectId, type Db } from 'mongodb';
 import { readArchive } from './archive';
+import { applyFolderMapping } from './folders';
 import { ImportError, LIMITS, type Contest, type Gateway, type Job, type Row } from './types';
 export const contestKey = (domain: string, id: string) => `${domain}:${id}`;
 export class ImportService {
@@ -29,18 +30,18 @@ export class ImportService {
     const claim = await this.claims.findOne({ _id: contestKey(domain, id) });
     return { ...contest, formalBatch: claim ? { id: String(claim.jobId), state: claim.state } : null };
   }
-  async preview(actor: number, domain: string, id: string, bytes: Uint8Array) {
+  async preview(actor: number, domain: string, id: string, bytes: Uint8Array, mapping?: unknown) {
     await this.permit(actor, domain, id);
     const contest = await this.gateway.contest(domain, id);
     if (await this.claims.findOne({ _id: contestKey(domain, id) })) throw new ImportError(409, '这场比赛已经确认过正式代码，只能在原批次查看或继续');
     if (await this.jobs.countDocuments({ actor, state: 'preview', createdAt: { $gt: new Date(Date.now() - LIMITS.previewMs) } }) >= 5) throw new ImportError(429, '最多保留 5 个有效预览，请先取消不需要的批次');
-    const input = await readArchive(bytes);
-    await this.gateway.participants?.(actor, domain, id, [...new Set(input.map(r=>r.uid))]);
+    const input = applyFolderMapping(await readArchive(bytes),contest,mapping);
     const resolved = await this.gateway.resolve(contest, input);
+    await this.gateway.participants?.(actor, domain, id, [...new Set(resolved.map(r=>r.uid).filter(uid=>uid>0))]);
     const now = new Date(), job: Job = {
       _id: new ObjectId(), domainId: domain, contestId: id, title: contest.title, actor,
       fingerprint: contest.fingerprint,
-      digest: createHash('sha256').update(JSON.stringify(input.map(r => [r.uid, r.problem, r.file, r.language, r.hash]))).digest('hex'),
+      digest: createHash('sha256').update(JSON.stringify(resolved.map(r => [r.uid, r.problem, r.file, r.language, r.hash]))).digest('hex'),
       state: 'preview', revision: 1, count: resolved.length, createdAt: now, updatedAt: now,
       expiresAt: new Date(now.getTime() + LIMITS.previewMs), error: '',
     };
@@ -61,7 +62,7 @@ export class ImportService {
     const output = [];
     for (const r of rows) {
       const result = r.pid && r.state !== 'pending' ? await this.gateway.result(job, r) : null;
-      output.push({ line: r.line, uid: r.uid, username: r.username, problem: r.problem, pid: r.pid, file: r.file, language: r.language, bytes: Buffer.byteLength(r.code), hash: r.hash, errors: r.errors, state: r.state, rid: r.pid && r.state !== 'pending' ? String(r.rid) : null, result });
+      output.push({ contestantName:r.contestantName,problemFolder:r.problemFolder,line: r.line, uid: r.uid, username: r.username, problem: r.problem, pid: r.pid, file: r.file, language: r.language, bytes: Buffer.byteLength(r.code), hash: r.hash, errors: r.errors, state: r.state, rid: r.pid && r.state !== 'pending' ? String(r.rid) : null, result });
     }
     const canResume = ['interrupted', 'attention'].includes(job.state) || (job.state === 'confirming' && Date.now() - job.updatedAt.getTime() >= 120_000) || (job.state === 'running' && !!job.heartbeat && Date.now() - job.heartbeat.getTime() >= 120_000);
     return { canResume, id: String(job._id), contestId: job.contestId, title: job.title, actor: job.actor, state: job.state, revision: job.revision, error: job.error, createdAt: job.createdAt, expiresAt: job.expiresAt, participants: new Set(rows.map(r => r.uid)).size, rows: output };
