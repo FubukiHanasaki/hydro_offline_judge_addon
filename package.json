@@ -1,6 +1,6 @@
 {
   "name": "hydro-offline-judge",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Hydro OI 离线赛代码包预览导入与自动评测",
   "author": "FubukiHanasaki",
   "license": "AGPL-3.0-or-later",
