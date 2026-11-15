@@ -1,4 +1,4 @@
-<div class="row" id="offline-app" data-api="{{ offlineApi }}" data-batches="{{ offlineBatchBase }}" data-selected="{{ offlineSelected }}">
+<div class="row" id="offline-app" data-api="{{ offlineApi }}" data-batches="{{ offlineBatchBase }}" data-selected="{{ offlineSelected }}" data-entry-label="{{ offlineEntryLabel }}">
   <div class="medium-9 columns">
     <div class="section">
       <div class="section__body">
@@ -22,12 +22,12 @@
     <section class="section" id="oj-preview-section" hidden>
       <div class="section__header"><h2 class="section__title" id="oj-batch-title">导入预览</h2><div class="section__tools"><span id="oj-state" class="oj-badge"></span></div></div>
       <div class="section__body">
-        <div id="oj-summary" class="oj-summary"></div><div id="oj-mapping" hidden></div>
+        <div id="oj-summary" class="oj-summary"></div><p id="oj-overwrite-warning" class="oj-error" role="alert" hidden></p><div id="oj-mapping" hidden></div>
         <p id="oj-job-error" class="oj-error" role="alert" hidden></p>
-        <div class="oj-table-wrap"><table class="data-table"><thead><tr><th>选手</th><th>题目 / 文件</th><th>语言</th><th>检查 / 评测</th><th>分数</th></tr></thead><tbody id="oj-rows"></tbody></table></div><div id="oj-mobile-rows" class="oj-mobile-list"></div>
+        <div class="oj-table-wrap"><table class="data-table"><thead><tr><th>选手</th><th>题目 / 文件</th><th>语言</th><th>检查 / 评测</th><th id="oj-score-heading">分数</th></tr></thead><tbody id="oj-rows"></tbody></table></div><div id="oj-mobile-rows" class="oj-mobile-list"></div>
       </div>
       <div class="section__body oj-actions" id="oj-actions">
-        <label id="oj-consent-wrap"><input id="oj-consent" type="checkbox"> 确认本批为最终正式代码，确认后不能再次上传</label>
+        <label id="oj-consent-wrap"><input id="oj-consent" type="checkbox"> <span id="oj-consent-text">确认将本批代码作为正式提交导入</span></label>
         <div class="oj-action-buttons"><button id="oj-cancel" class="rounded button" type="button">取消预览</button><button id="oj-resume" class="rounded button" type="button" hidden>检查并继续原批次</button><button id="oj-confirm" class="primary rounded button" type="button" disabled>确认导入并评测</button></div>
       </div>
     </section>

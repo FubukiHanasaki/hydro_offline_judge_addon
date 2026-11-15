@@ -25,16 +25,23 @@ export class ImportService {
   private async permit(actor: number, domain: string, contestId?: string) {
     if (!await this.gateway.authorize(actor, domain, contestId)) throw new ImportError(403, '需要当前子域的比赛管理权限');
   }
+  private async importable(contest: Contest) {
+    const reason = await this.gateway.importBlock?.(contest);
+    if (reason) throw new ImportError(409, reason);
+    const claim = await this.claims.findOne({ _id: contestKey(contest.domainId, contest.id) });
+    if (claim && (claim.state !== 'complete' || !this.gateway.replacement)) throw new ImportError(409, '原离线批次尚未完成，请先查看或继续原批次');
+  }
   async competition(actor: number, domain: string, id: string) {
     await this.permit(actor, domain, id);
     const contest = await this.gateway.contest(domain, id);
-    const claim = await this.claims.findOne({ _id: contestKey(domain, id) });
-    return { ...contest, formalBatch: claim ? { id: String(claim.jobId), state: claim.state } : null };
+    const claim = await this.claims.findOne({ _id: contestKey(domain, contest.id) });
+    const reason = await this.gateway.importBlock?.(contest) || (claim && (claim.state !== 'complete' || !this.gateway.replacement) ? '原离线批次尚未完成，请先查看或继续原批次' : '');
+    return { ...contest, importAllowed: !reason, importBlock: reason, formalBatch: claim ? { id: String(claim.jobId), state: claim.state } : null };
   }
   async preview(actor: number, domain: string, id: string, bytes: Uint8Array, mapping?: unknown, language?: unknown) {
     await this.permit(actor, domain, id);
     const contest = await this.gateway.contest(domain, id);
-    if (await this.claims.findOne({ _id: contestKey(domain, id) })) throw new ImportError(409, '这场比赛已经确认过正式代码，只能在原批次查看或继续');
+    await this.importable(contest);
     if (await this.jobs.countDocuments({ actor, state: 'preview', createdAt: { $gt: new Date(Date.now() - LIMITS.previewMs) } }) >= 5) throw new ImportError(429, '最多保留 5 个有效预览，请先取消不需要的批次');
     const archive = await readArchive(bytes);
     return this.createPreview(actor, domain, contest, archive, archive.ignoredFiles, mapping, language);
@@ -48,12 +55,14 @@ export class ImportService {
     const input = preserveLanguage ? mapped : applyUploadLanguage(mapped,language);
     const resolved = await this.gateway.resolve(contest, input);
     await this.gateway.participants?.(actor, domain, id, [...new Set(resolved.filter(r=>!r.excluded).map(r => r.uid).filter(uid=>uid>0))]);
+    await this.importable(contest);
+    const replacement = await this.gateway.replacement?.(contest, resolved);
     const now = new Date(), job: Job = {
       _id: new ObjectId(), domainId: domain, contestId: id, title: contest.title, actor,
       fingerprint: contest.fingerprint,
       digest: createHash('sha256').update(JSON.stringify(resolved.map(r => [r.uid, r.problem, r.file, r.language, r.hash, !!r.excluded]))).digest('hex'),
       state: 'preview', revision: 1, count: resolved.length, createdAt: now, updatedAt: now,
-      expiresAt: new Date(now.getTime() + LIMITS.previewMs), error: '', ignoredFiles,
+      expiresAt: new Date(now.getTime() + LIMITS.previewMs), error: '', ignoredFiles, ...(replacement ? { replacement } : {}),
     };
     await this.rows.insertMany(resolved.map((r, i) => ({ ...r, _id: `${job._id}:${i}`, jobId: job._id, domainId: domain, contestId: id, state: 'pending' as const })));
     try { await this.jobs.insertOne(job); } catch (e) { await this.rows.deleteMany({ jobId: job._id }); throw e; }
@@ -78,11 +87,16 @@ export class ImportService {
       output.push({ excluded:!!r.excluded, contestantName:r.contestantName,problemFolder:r.problemFolder,line: r.line, uid: r.uid, username: r.username, problem: r.problem, pid: r.pid, file: r.file, language: r.language, bytes: Buffer.byteLength(r.code), hash: r.hash, errors: r.errors, state: r.state, rid: r.pid && r.state !== 'pending' ? String(r.rid) : null, result });
     }
     const canResume = ['interrupted', 'attention'].includes(job.state) || (job.state === 'confirming' && Date.now() - job.updatedAt.getTime() >= 120_000) || (job.state === 'running' && !!job.heartbeat && Date.now() - job.heartbeat.getTime() >= 120_000);
-    return { canResume, needsMatch, ignoredFiles, id: String(job._id), contestId: job.contestId, title: job.title, actor: job.actor, state: job.state, revision: job.revision, error: job.error, createdAt: job.createdAt, expiresAt: job.expiresAt, participants: new Set(rows.filter(r=>!r.excluded).map(r => r.uid)).size, rows: output };
+    const targets = job.replacement?.targets.filter(t => t.records.length || t.journal.length) ?? [];
+    const overwrite = { required: !!(targets.length || job.replacement?.previousJobId), records: targets.reduce((n, t) => n + t.records.length, 0), targets: targets.map(t => ({ uid: t.uid, pid: t.pid, score: t.score })), previousBatch: job.replacement?.previousJobId ?? null };
+    const active = job.state === 'complete' ? await this.claims.findOne({ _id: contestKey(domain, job.contestId) }) : null;
+    const superseded = !!active && String(active.jobId) !== String(job._id);
+    return { canResume, overwrite, superseded, needsMatch, ignoredFiles, id: String(job._id), contestId: job.contestId, title: job.title, actor: job.actor, state: job.state, revision: job.revision, error: job.error, createdAt: job.createdAt, expiresAt: job.expiresAt, participants: new Set(rows.filter(r=>!r.excluded).map(r => r.uid)).size, rows: output };
   }
   async history(actor: number, domain: string, id: string) {
     await this.permit(actor, domain);
     if (!/^[a-f\d]{24}$/i.test(id)) throw new ImportError(400, '比赛 ID 无效');
+    id = new ObjectId(id).toHexString();
     await this.permit(actor, domain, id);
     return (await this.jobs.find({ domainId: domain, contestId: id }).sort({ createdAt: -1 }).limit(30).toArray()).map(j => ({ id: String(j._id), state: j.state, count: j.count, createdAt: j.createdAt, actor: j.actor }));
   }
@@ -90,8 +104,8 @@ export class ImportService {
     const job=await this.job(actor,domain,id);
     if(job.actor!==actor)throw new ImportError(403,'只能调整自己的导入预览');
     if(job.state!=='preview'||job.revision!==revision||job.expiresAt<=new Date())throw new ImportError(409,'预览已变化或过期');
-    if(await this.claims.findOne({_id:contestKey(domain,job.contestId)}))throw new ImportError(409,'比赛已经确认正式批次');
     const contest=await this.gateway.contest(domain,job.contestId);
+    await this.importable(contest);
     if(contest.fingerprint!==job.fingerprint)throw new ImportError(409,'比赛配置已变化，请重新预览');
     const rows=await this.rows.find({jobId:job._id}).sort({line:1}).toArray();
     if(rows.length!==job.count)throw new ImportError(409,'预览明细不完整');
@@ -100,11 +114,17 @@ export class ImportService {
     catch(error) { await this.cancel(actor,domain,fresh.id,fresh.revision);throw error; }
     return fresh;
   }
-  async confirm(actor: number, domain: string, id: string, revision: number) {
+  async confirm(actor: number, domain: string, id: string, revision: number, acknowledgeOverwrite = false) {
+    await this.permit(actor, domain);
+    const work = (verify = async () => {}) => this.confirmLocked(actor, domain, id, revision, acknowledgeOverwrite, verify);
+    return this.gateway.withMutation ? this.gateway.withMutation(work) : work();
+  }
+  private async confirmLocked(actor: number, domain: string, id: string, revision: number, acknowledgeOverwrite: boolean, verify: () => Promise<void>) {
     const job = await this.job(actor, domain, id);
     if (!Number.isSafeInteger(revision) || job.revision !== revision || job.state !== 'preview') throw new ImportError(409, '预览状态已变化，请重新打开');
     if (job.expiresAt <= new Date()) throw new ImportError(409, '预览已过期，请重新上传');
     const contest = await this.gateway.contest(domain, job.contestId);
+    await this.importable(contest);
     if (contest.fingerprint !== job.fingerprint) throw new ImportError(409, '比赛、题目或语言配置已变化，请重新预览');
     const rows = await this.rows.find({ jobId: job._id }).sort({ line: 1 }).toArray();
     if(rows.some(r=>!matchesFolderFile(r)))throw new ImportError(409,'请先应用文件选择与匹配');
@@ -112,21 +132,29 @@ export class ImportService {
     await this.gateway.participants?.(actor, domain, job.contestId, [...new Set(rows.filter(r=>!r.excluded).map(r=>r.uid))]);
     const rechecked = await this.gateway.resolve(contest, rows);
     if (rechecked.some(r => !r.excluded&&r.errors.length)) throw new ImportError(409, '账号、成员关系或已有提交已变化，请重新预览');
+    const fresh = await this.gateway.replacement?.(contest, rechecked);
+    if (fresh && (!job.replacement || fresh.fingerprint !== job.replacement.fingerprint)) throw new ImportError(409, '既有提交、成绩或离线批次已变化，请重新预览');
+    if (fresh && (fresh.previousJobId || fresh.targets.some(t => t.records.length || t.journal.length)) && acknowledgeOverwrite !== true) throw new ImportError(409, '请明确确认覆盖既有提交和成绩后再导入');
+    await verify();
     const locked = await this.jobs.updateOne({ _id: job._id, state: 'preview', revision }, { $set: { state: 'confirming', updatedAt: new Date() }, $inc: { revision: 1 } });
     if (!locked.modifiedCount) throw new ImportError(409, '预览状态已变化');
-    // The permanent unique contest claim is the single-upload boundary. It is
-    // deliberately never released after acceptance, even if a worker crashes.
+    // Only one active batch can own a contest. A completed, unreviewed batch
+    // can be replaced through an exact compare-and-swap, never during a run.
     try {
-      await this.claims.insertOne({ _id: contestKey(domain, job.contestId), domainId: domain, contestId: job.contestId, jobId: job._id, state: 'importing', actor, createdAt: new Date() });
+      const claim = { _id: contestKey(domain, job.contestId), domainId: domain, contestId: job.contestId, jobId: job._id, state: 'importing', actor, createdAt: new Date() };
+      if (fresh?.previousJobId) {
+        const changed = await this.claims.replaceOne({ _id: claim._id, jobId: new ObjectId(fresh.previousJobId), state: 'complete' }, claim);
+        if (!changed.modifiedCount) throw Object.assign(new Error('Claim changed'), { code: 11000 });
+      } else await this.claims.insertOne(claim);
     } catch (e: any) {
       if (e.code === 11000) {
         await this.jobs.updateOne({ _id: job._id, state: 'confirming' }, { $set: { state: 'cancelled', error: '比赛已有正式批次' }, $inc: { revision: 1 } });
         await this.rows.updateMany({ jobId: job._id }, { $set: { code: '' } });
-        throw new ImportError(409, '这场比赛已经确认过正式代码，请打开原批次');
+        throw new ImportError(409, '正式批次已变化，请重新打开并预览');
       }
       throw e;
     }
-    await this.audit.insertOne({ domainId: domain, contestId: job.contestId, jobId: job._id, actor, action: 'confirm', at: new Date(), digest: job.digest, rows: job.count });
+    await this.audit.insertOne({ domainId: domain, contestId: job.contestId, jobId: job._id, actor, action: fresh?.previousJobId || fresh?.targets.some(t => t.records.length || t.journal.length) ? 'confirm-overwrite' : 'confirm', at: new Date(), digest: job.digest, rows: job.count, previousJobId: fresh?.previousJobId ?? null });
     await this.jobs.updateOne({ _id: job._id, state: 'confirming' }, { $set: { state: 'queued', actor, updatedAt: new Date() }, $inc: { revision: 1 } });
     return this.view(actor, domain, id);
   }
@@ -154,6 +182,9 @@ export class ImportService {
     if (!await this.gateway.authorize(job.actor, job.domainId, job.contestId)) throw new ImportError(403, '操作人的比赛管理权限已失效');
     await this.gateway.participants?.(job.actor, job.domainId, job.contestId, (await this.rows.find({jobId:job._id,excluded:{$ne:true}}).project({uid:1}).toArray()).map(r=>r.uid));
     const contest = await this.gateway.contest(job.domainId, job.contestId);
+    const reason = await this.gateway.importBlock?.(contest);
+    if (reason) throw new ImportError(409, reason);
+    if (!await this.claims.findOne({ _id: contestKey(job.domainId, job.contestId), jobId: job._id, state: 'importing' })) throw new ImportError(409, '批次已被替换，不能继续执行');
     if (contest.fingerprint !== job.fingerprint) throw new ImportError(409, '比赛配置变化，批次已暂停');
     const lock = await this.jobs.updateOne({ _id: job._id, state: 'running', token }, { $set: { heartbeat: new Date(), updatedAt: new Date() } });
     if (!lock.matchedCount) throw new ImportError(409, '运行权已变化');

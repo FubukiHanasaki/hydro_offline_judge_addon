@@ -87,10 +87,11 @@ export async function apply(ctx: Context) {
     async post() { await this.run(async () => {
       if (!this.context.is('application/json')) throw new ImportError(400, '需要 JSON 请求');
       const b = this.context.request.body;
-      if (!b || typeof b !== 'object' || Array.isArray(b) || Object.keys(b).some(k => !['action', 'revision', 'mapping', 'language'].includes(k))) throw new ImportError(400, '请求格式错误');
+      if (!b || typeof b !== 'object' || Array.isArray(b) || Object.keys(b).some(k => !['action', 'revision', 'mapping', 'language', 'acknowledgeOverwrite'].includes(k)) || b.acknowledgeOverwrite !== undefined && typeof b.acknowledgeOverwrite !== 'boolean') throw new ImportError(400, '请求格式错误');
       if(b.action==='match'){if(!Number.isSafeInteger(b.revision))throw new ImportError(400,'版本无效');return service.match(this.user._id,this.domain._id,this.context.params.id,b.revision,b.mapping,b.language);}
       const fn = b.action === 'confirm' ? service.confirm : b.action === 'cancel' ? service.cancel : b.action === 'resume' ? service.resume : null;
       if (!fn || !Number.isSafeInteger(b.revision)) throw new ImportError(400, '操作或版本无效');
+      if (b.action === 'confirm') return service.confirm(this.user._id, this.domain._id, this.context.params.id, b.revision, b.acknowledgeOverwrite === true);
       return fn.call(service, this.user._id, this.domain._id, this.context.params.id, b.revision);
     }); }
   }
@@ -144,6 +145,7 @@ export async function apply(ctx: Context) {
     if (h.tdoc?.rule !== 'oi' || h.tdoc.endAt > new Date() || !/^[a-f\d]{24}$/i.test(tid)) return;
     if (!['contest_detail.html', 'sms_contest_detail.html'].includes(h.response.template)) return;
     if (!await gateway.authorize(h.user?._id || 0, h.domain._id, tid)) return;
+    const formalBatch = await service.claims.findOne({ _id: `${h.domain._id}:${tid}` });
     h.response.addHeader('Cache-Control', 'private, no-store');
     h.response.addHeader('Vary', 'Cookie, Authorization');
     Object.assign(h.response.body, {
@@ -151,6 +153,7 @@ export async function apply(ctx: Context) {
       offlineApi: h.url('offline_judge_contests'),
       offlineBatchBase: h.url('offline_judge_batch', { id: '000000000000000000000000' }).replace(/\/0{24}$/, ''),
       offlineSelected: tid,
+      offlineEntryLabel: formalBatch ? '查看离线代码包' : '提交离线代码包',
     });
     h.response.template = 'offline_contest_detail.html';
   });

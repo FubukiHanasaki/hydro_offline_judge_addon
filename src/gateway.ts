@@ -4,9 +4,23 @@ import { ObjectId, type Db } from 'mongodb';
 import { ContestModel, ProblemModel, RecordModel, UserModel, SettingModel, SystemModel, PERM, PRIV, STATUS } from 'hydrooj';
 import { ImportError, LIMITS, type Contest, type Gateway, type InputRow, type Job, type Row } from './types';
 import { allowedLanguages, languageErrors } from './languages';
+import { ReplacementGuard } from './replacement';
 export class HydroGateway implements Gateway {
   constructor(readonly db: Db) {}
+  withMutation<T>(work: (verify: () => Promise<void>) => Promise<T>) { return new ReplacementGuard(this.db).locked(work); }
+  replacement(contest: Contest, rows: Awaited<ReturnType<HydroGateway['resolve']>>) { return new ReplacementGuard(this.db).plan(contest, rows); }
+  async importBlock(contest: Contest): Promise<string | null> {
+    if (await new ReplacementGuard(this.db).reviewed(contest.domainId, contest.id)) return '本场比赛已核验 Rating，不能再导入或覆盖正式代码';
+    const config = await this.db.collection('sms_rating_contests').findOne({ _id: `${contest.domainId}:${contest.id}` as any });
+    const bridge = (globalThis as any)[Symbol.for('hydro.sms.exams')];
+    if (config?.enabled && !(bridge?.reviewRequired && await bridge.managed(contest.domainId, contest.id))) return '请先关闭这场比赛的 Rating 计分，待导入评测完成后再启用';
+    return null;
+  }
   async authorize(actor: number, domain: string, contestId?: string) {
+    if (contestId) {
+      if (!/^[a-f\d]{24}$/i.test(contestId)) return false;
+      contestId = new ObjectId(contestId).toHexString();
+    }
     const user = await UserModel.getById(domain, actor);
     if (!(actor > 0 && user?._id === actor && user.hasPriv(PRIV.PRIV_USER_PROFILE) && user.hasPerm(PERM.PERM_VIEW_CONTEST))) return false;
     const bridge = (globalThis as any)[Symbol.for('hydro.sms.exams')];
@@ -34,28 +48,22 @@ export class HydroGateway implements Gateway {
   }
   async contest(domain: string, id: string): Promise<Contest> {
     if (!/^[a-f\d]{24}$/i.test(id)) throw new ImportError(400, '比赛 ID 无效');
+    id = new ObjectId(id).toHexString();
     const t = await ContestModel.get(domain, new ObjectId(id));
     if (!t || t.domainId !== domain) throw new ImportError(404, '当前子域中没有这场比赛');
     if (t.rule !== 'oi') throw new ImportError(409, '仅支持 OI 比赛');
     if (!(t.endAt instanceof Date) || t.endAt > new Date()) throw new ImportError(409, '正式代码需要在比赛结束后导入');
-    if (t.duration || t.allowTeam || t.assign?.length) throw new ImportError(409, '暂不支持个人计时、团队或分组限定的比赛');
+    if (t.allowTeam || t.assign?.length) throw new ImportError(409, '暂不支持团队或分组限定的比赛');
     if (t.lockAt && !t.unlocked) throw new ImportError(409, '请先解除比赛封榜');
     if (!t.pids?.length || t.pids.length > 100) throw new ImportError(409, '比赛需要包含 1–100 道题目');
-    const claim = await this.db.collection('offline_judge_contests').findOne({ _id: `${domain}:${id}` as any });
-    if (await this.db.collection('record').findOne({ domainId: domain, contest: new ObjectId(id), 'offlineImport.jobId': { $ne: claim ? String(claim.jobId) : '' } }, { projection: { _id: 1 } })) throw new ImportError(409, '比赛已有其他正式提交，请使用专门的离线 OI 比赛');
-    if (claim?.state !== 'complete') {
-      const bridge=(globalThis as any)[Symbol.for('hydro.sms.exams')];
-      const config=await this.db.collection('sms_rating_contests').findOne({_id:`${domain}:${id}` as any});
-      const head=await this.db.collection('sms_rating_head').findOne({_id:'global' as any});
-      const published=head&&await this.db.collection('sms_rating_sources').findOne({generation:head.generation,key:`contest:${domain}:${id}`});
-      if(published)throw new ImportError(409,'比赛已有核验评分，请先由管理员撤销本场评分并核验，再导入正式代码');
-      if(config?.enabled&&!(bridge?.reviewRequired&&await bridge.managed(domain,id)))throw new ImportError(409,'请先关闭这场比赛的 Rating 计分，待导入评测完成后再启用');
-    }
     const d = await this.db.collection('domain').findOne({ _id: domain as any });
     if (!d) throw new ImportError(404, '子域不存在');
     const problems = [];
     for (const pid of t.pids) { const { p, effective: e } = await this.problem(domain, pid); const source=p.reference?await this.db.collection('domain').findOne({_id:p.reference.domainId as any}):null; if(p.reference&&!source)throw new ImportError(409,'题目来源子域不存在');problems.push([pid, p.reference, e.config, e.data, source?.langs]); }
-    const fingerprint = createHash('sha256').update(JSON.stringify([t.title, t.rule, t.beginAt, t.endAt, t.pids, t.score, t.langs, t.lockAt, t.unlocked, d.langs, problems, SettingModel.langs, SystemModel.get('limit.codelength')])).digest('hex');
+    const settings = [t.title, t.rule, t.beginAt, t.endAt, t.pids, t.score, t.langs, t.lockAt, t.unlocked, d.langs, problems, SettingModel.langs, SystemModel.get('limit.codelength')];
+    // Keep existing fixed-time batch fingerprints valid across this upgrade.
+    if (t.duration) settings.push({ duration: t.duration });
+    const fingerprint = createHash('sha256').update(JSON.stringify(settings)).digest('hex');
     return { id, domainId: domain, title: t.title, rule: t.rule, beginAt: t.beginAt, endAt: t.endAt, pids: t.pids, fingerprint };
   }
   async resolve(contest: Contest, rows: InputRow[], ownJob?: string) {
@@ -96,8 +104,6 @@ export class HydroGateway implements Gateway {
             const allowed=allowedLanguages(SettingModel.langs,{problem:p.config.langs,contest:t.langs,domain:d?.langs,sourceDomain:source?.langs});
             errors.push(...languageErrors(row.language,SettingModel.langs,allowed));
           } catch (e) { errors.push(e instanceof ImportError ? e.message : '无法读取题目'); }
-          const existing = await this.db.collection('record').find({ domainId: contest.domainId, contest: new ObjectId(contest.id), uid: row.uid, pid }, { projection: { offlineImport: 1 } }).limit(2).toArray();
-          if (existing.some(r => !ownJob || r.offlineImport?.jobId !== ownJob)) errors.push('已有正式比赛提交，不能覆盖');
         }
         if (Buffer.byteLength(row.code) > Math.min(LIMITS.code, SystemModel.get('limit.codelength') || LIMITS.code)) errors.push('代码超过服务器限制');
       }
@@ -118,8 +124,10 @@ export class HydroGateway implements Gateway {
     }
     status = await ContestModel.getStatus(job.domainId, tid, row.uid);
     if (!status?.attend) throw new ImportError(409, `UID ${row.uid} 登记参赛失败，已停止导入`);
-    await ContestModel.setStatus(job.domainId, tid, row.uid, { startAt: (await ContestModel.get(job.domainId, tid)).beginAt, offlineImport: String(job._id) });
+    await ContestModel.setStatus(job.domainId, tid, row.uid, { startAt: status.startAt ?? (await ContestModel.get(job.domainId, tid)).beginAt, offlineImport: String(job._id) });
     if (!row.pid) return;
+    if (!job.replacement && await this.db.collection('record').findOne({ domainId: job.domainId, contest: tid, uid: row.uid, pid: row.pid, 'offlineImport.jobId': { $ne: String(job._id) } })) throw new ImportError(409, '旧批次没有覆盖预览，不能覆盖其他正式提交');
+    await new ReplacementGuard(this.db).apply(job, row);
     const old = await RecordModel.get(job.domainId, row.rid);
     if (old) {
       if (old.offlineImport?.jobId !== String(job._id) || old.offlineImport?.hash !== row.hash || old.uid !== row.uid || old.pid !== row.pid || String(old.contest) !== job.contestId) throw new ImportError(409, '评测记录与批次不一致，已停止');
@@ -149,6 +157,7 @@ export class HydroGateway implements Gateway {
   async result(job: Job, row: Row) {
     const r = await RecordModel.get(job.domainId, row.rid);
     if (!r || r.offlineImport?.jobId !== String(job._id)) return { status: null, score: null, terminal: false, queued: false };
+    if (!r.contest && r.offlineSuperseded?.contestId === job.contestId) return { status: r.offlineSuperseded.status ?? r.status, score: r.offlineSuperseded.score ?? r.score, terminal: true, queued: false };
     const queued = !!await this.db.collection('task').findOne({ domainId: job.domainId, rid: row.rid }, { projection: { _id: 1 } });
     const s = await ContestModel.getStatus(job.domainId, new ObjectId(job.contestId), row.uid);
     const journal = s?.journal?.find((j: any) => String(j.rid) === String(row.rid));

@@ -3,7 +3,6 @@
   'use strict';
   const app = document.getElementById('offline-app');
   if (!app || app.dataset.ready) return;
-  app.dataset.ready = '1';
   const dialog = document.getElementById('offline-import-dialog');
   const $ = id => document.getElementById(`oj-${id}`);
   const base = app.dataset.api, prefix = base.slice(0, base.indexOf('/offline-judge/'));
@@ -22,8 +21,8 @@
     return data.data;
   }
   function controls() {
-    const valid = !!competition && !competition.formalBatch;
-    $('upload').hidden = !!competition?.formalBatch;
+    const valid = !!competition && competition.importAllowed !== false;
+    $('upload').hidden = !!competition && !valid;
     $('preview').disabled = busy || !valid || !$('language').value;
     $('language').disabled = busy || !valid;
     $('file').disabled = busy || !valid;
@@ -33,7 +32,7 @@
     app.querySelectorAll('[data-import-file]').forEach(el=>el.disabled=busy);
     const preview = batch?.state === 'preview';
     $('confirm').hidden = !preview; $('cancel').hidden = !preview; $('consent-wrap').hidden = !preview;
-    $('confirm').disabled = busy || mappingDirty || !$('consent').checked || batch?.rows.some(r => !r.excluded&&r.errors.length) || !batch?.rows.some(r=>!r.excluded);
+    $('confirm').disabled = busy || !valid || mappingDirty || !$('consent').checked || batch?.rows.some(r => !r.excluded&&r.errors.length) || !batch?.rows.some(r=>!r.excluded);
     $('cancel').disabled = busy;
     $('resume').hidden = !batch?.canResume;
     $('actions').hidden = !preview && $('resume').hidden;
@@ -41,10 +40,12 @@
   }
   function alphabet(index) { let out = ''; for (index++; index > 0; index = Math.floor((index - 1) / 26)) out = String.fromCharCode(65 + (index - 1) % 26) + out; return out; }
   function drawCompetition(c) {
+    document.querySelectorAll('[data-offline-open]').forEach(b => { b.textContent = c.formalBatch ? '查看离线代码包' : '提交离线代码包'; });
     document.getElementById('offline-import-title').textContent = '提交离线代码包 · ' + c.title;
     $('problems').replaceChildren(...c.pids.map((pid, index) => node('p', `${alphabet(index)} · 题目 ${pid}`)));
     const chosen=$('language').value;const empty=node('option','请选择语言');empty.value='';$('language').replaceChildren(empty,...c.languages.map(lang=>{const option=node('option',`${lang.name} (${lang.id})`);option.value=lang.id;return option;}));$('language').value=c.languages.some(lang=>lang.id===chosen)?chosen:'';
     $('history').replaceChildren();
+    if (c.importBlock) notice(c.importBlock);
     if (!c.history.length) $('history').textContent = '暂无导入记录';
     for (const item of c.history) {
       const div = node('div', undefined, 'oj-history-item'), b = node('button', '查看', 'link');
@@ -77,8 +78,13 @@
     if(batch.state==='preview'){const lang=batch.rows.find(r=>r.file&&!r.excluded)?.language||batch.rows.find(r=>r.file)?.language;if(lang&&Array.from($('language').options).some(o=>o.value===lang))$('language').value=lang;}
     $('preview-section').hidden = false;
     $('batch-title').textContent = batch.state === 'preview' ? '导入前预览' : '正式导入批次';
-    $('state').textContent = labels[batch.state] || batch.state;
+    $('state').textContent = (labels[batch.state] || batch.state) + (batch.superseded ? ' · 已替换' : '');
     $('job-error').textContent = batch.error; $('job-error').hidden = !batch.error;
+    const overwrite = batch.state === 'preview' && batch.overwrite?.required;
+    $('overwrite-warning').hidden = !overwrite;
+    $('overwrite-warning').textContent = overwrite ? batch.overwrite.targets.length ? `警告：确认后将覆盖包内对应选手和题目的既有正式成绩（${batch.overwrite.targets.length} 项、${batch.overwrite.records} 份提交）。旧代码和评测记录保留，包外选手及题目不变。` : '警告：本场已有离线批次。本批将成为当前批次，旧代码和评测记录保留，包外选手及题目不变。' : '';
+    $('consent-text').textContent = overwrite ? '已核对覆盖范围，确认覆盖既有提交和成绩并重新评测' : '确认将本批代码作为正式提交导入';
+    const scoreLabel = overwrite ? '原成绩' : '分数'; $('score-heading').textContent = scoreLabel;
     $('summary').replaceChildren();
     const submitted = batch.rows.filter(r => !r.excluded&&r.pid), done = submitted.filter(r => r.result?.terminal).length;
     for (const [title, value] of [['参赛选手', batch.participants], ['代码文件', submitted.length], ['已完成评测', done], ['检查错误', batch.rows.filter(r => !r.excluded&&r.errors.length).length]]) {
@@ -98,12 +104,14 @@
       else if (row.result) check.append(node('span', statuses[row.result.status] || '等待检查'));
       else check.append(node('span', batch.state === 'preview' ? '检查通过' : '等待导入'));
       if (row.rid) { const a = node('a', '评测记录'); a.href = `${prefix}/record/${encodeURIComponent(row.rid)}`; const small = node('small'); small.append(a); check.append(small); }
-      const score = node('td', row.result?.terminal ? String(row.result.score) : '—');
+      const originalScore = overwrite && !row.excluded ? batch.overwrite.targets.find(t => t.uid === row.uid && t.pid === row.pid)?.score : null;
+      const scoreValue = overwrite ? originalScore ?? '—' : row.result?.terminal ? String(row.result.score) : '—';
+      const score = node('td', String(scoreValue));
       tr.append(user, problem, node('td', row.language || '—'), check, score); $('rows').append(tr);
       const card = node('div', undefined, 'oj-mobile-card'), head = node('div', undefined, 'oj-card-head');
-      const person = node('div'), points = node('div', row.result?.terminal ? String(row.result.score) : '—', 'oj-card-score');
+      const person = node('div'), points = node('div', String(scoreValue), 'oj-card-score');
       for (const child of user.childNodes) person.append(child.cloneNode(true));
-      points.prepend(node('small', '分数')); head.append(person, points);
+      points.prepend(node('small', scoreLabel)); head.append(person, points);
       const file = node('div', undefined, 'oj-card-file'); for (const child of problem.childNodes) file.append(child.cloneNode(true));
       const foot = node('div', undefined, 'oj-card-foot'), state = node('div');
       for (const child of check.childNodes) state.append(child.cloneNode(true));
@@ -150,7 +158,7 @@
     if (operation === 'confirm' && (mappingDirty || !$('consent').checked || batch.rows.some(r => !r.excluded&&r.errors.length) || !batch.rows.some(r=>!r.excluded))) return;
     busy = true; controls(); notice();
     try {
-      const value = await api(`${app.dataset.batches}/${encodeURIComponent(batch.id)}`, { action: operation, revision: batch.revision });
+      const value = await api(`${app.dataset.batches}/${encodeURIComponent(batch.id)}`, { action: operation, revision: batch.revision, ...(operation === 'confirm' ? { acknowledgeOverwrite: batch.overwrite?.required === true && $('consent').checked } : {}) });
       drawBatch(value);
       if (operation !== 'cancel') competition.formalBatch = { id: value.id, state: value.state };
       await refreshDetails();
@@ -160,7 +168,7 @@
   }
   app.addEventListener('change',e=>{const input=e.target;if(!input.matches?.('[data-import-file]'))return;fileSelections.set(input.dataset.importFile,input.checked);for(const other of app.querySelectorAll('[data-import-file]'))if(other.dataset.importFile===input.dataset.importFile)other.checked=input.checked;mappingDirty=true;$('consent').checked=false;controls();});
   $('upload').addEventListener('submit', async e => {
-    e.preventDefault(); if (busy || !competition || competition.formalBatch || !$('language').value) return;
+    e.preventDefault(); if (busy || !competition || competition.importAllowed === false || !$('language').value) return;
     const file = $('file').files[0]; if (!file) return; uploadedFile = file;
     if (file.size > 10 * 1024 * 1024) { notice('ZIP 不能超过 10 MB'); return; }
     busy = true; controls(); notice();
@@ -193,7 +201,7 @@
       const header = document.querySelector('.row > .medium-9.columns > .section:first-child > .section__header');
       if (header) {
         const tools = node('div', undefined, 'oj-native-entry');
-        const entry = node('button', '提交离线代码包', 'tool-button');
+        const entry = node('button', app.dataset.entryLabel || '提交离线代码包', 'tool-button');
         entry.type = 'button'; entry.dataset.offlineOpen = ''; tools.append(entry); header.append(tools);
       }
     }
@@ -201,6 +209,8 @@
     dialog.querySelectorAll('[data-offline-close]').forEach(b => b.addEventListener('click', () => dialog.close()));
     dialog.addEventListener('close', () => clearTimeout(timer));
     window.addEventListener('hashchange', () => { if (location.hash === '#offline-code') void openImporter(); });
-    if (location.hash === '#offline-code') void openImporter();
   }
+  // Mark ready only after controls and entry handlers have been installed.
+  app.dataset.ready = '1';
+  if (dialog && location.hash === '#offline-code') void openImporter();
 })();
