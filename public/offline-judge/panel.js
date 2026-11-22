@@ -42,7 +42,8 @@
   function drawCompetition(c) {
     document.querySelectorAll('[data-offline-open]').forEach(b => { b.textContent = c.formalBatch ? '查看离线代码包' : '提交离线代码包'; });
     document.getElementById('offline-import-title').textContent = '提交离线代码包 · ' + c.title;
-    $('problems').replaceChildren(...c.pids.map((pid, index) => node('p', `${alphabet(index)} · 题目 ${pid}`)));
+    $('problems').replaceChildren(...c.pids.map((pid, index) => node('p', `${alphabet(index)} · 题目 ${pid}${c.problems?.find(p=>p.pid===pid)?.englishName?' · '+c.problems.find(p=>p.pid===pid).englishName:''}`)));
+    if(c.settingsUrl){const settingsLink=node('a','设置题目英文名与比赛 IO','link');settingsLink.href=c.settingsUrl;$('problems').append(settingsLink);}
     const chosen=$('language').value;const empty=node('option','请选择语言');empty.value='';$('language').replaceChildren(empty,...c.languages.map(lang=>{const option=node('option',`${lang.name} (${lang.id})`);option.value=lang.id;return option;}));$('language').value=c.languages.some(lang=>lang.id===chosen)?chosen:'';
     $('history').replaceChildren();
     if (c.importBlock) notice(c.importBlock);

@@ -5,6 +5,7 @@ import { ContestModel, ProblemModel, RecordModel, UserModel, SettingModel, Syste
 import { ImportError, LIMITS, type Contest, type Gateway, type InputRow, type Job, type Row } from './types';
 import { allowedLanguages, languageErrors } from './languages';
 import { ReplacementGuard } from './replacement';
+import { SettingsStore } from './contest-settings';
 export class HydroGateway implements Gateway {
   constructor(readonly db: Db) {}
   withMutation<T>(work: (verify: () => Promise<void>) => Promise<T>) { return new ReplacementGuard(this.db).locked(work); }
@@ -63,6 +64,7 @@ export class HydroGateway implements Gateway {
     const settings = [t.title, t.rule, t.beginAt, t.endAt, t.pids, t.score, t.langs, t.lockAt, t.unlocked, d.langs, problems, SettingModel.langs, SystemModel.get('limit.codelength')];
     // Keep existing fixed-time batch fingerprints valid across this upgrade.
     if (t.duration) settings.push({ duration: t.duration });
+    const configured=await new SettingsStore(this.db).read(domain,id);if(Object.keys(configured.problems).length)settings.push({offlineSettings:configured.problems} as any);
     const fingerprint = createHash('sha256').update(JSON.stringify(settings)).digest('hex');
     return { id, domainId: domain, title: t.title, rule: t.rule, beginAt: t.beginAt, endAt: t.endAt, pids: t.pids, fingerprint };
   }
@@ -71,6 +73,8 @@ export class HydroGateway implements Gateway {
     const result = [];
     const d = await this.db.collection('domain').findOne({ _id: contest.domainId as any });
     const t = await ContestModel.get(contest.domainId, new ObjectId(contest.id));
+    const configured=await new SettingsStore(this.db).read(contest.domainId,contest.id);
+    const configuredNames=new Map(Object.entries(configured.problems).filter(([,v])=>v.name).map(([pid,v])=>[v.name.toLowerCase(),Number(pid)]));
     const nameCache=new Map<string,number[]>(),problemAliases=new Map<string,number[]>();
     if(rows.some(r=>r.problemFolder&&!r.manualProblem))for(const pid of contest.pids){const {p,effective}=await this.problem(contest.domainId,pid);for(const value of new Set([p.pid,p.title,effective.config.filename].filter(v=>typeof v==='string'&&/^[A-Za-z][A-Za-z0-9_-]*$/.test(v)).map(v=>v.toLowerCase()))){problemAliases.set(value,[...(problemAliases.get(value)||[]),pid]);}}
     for (const original of rows) {
@@ -81,7 +85,7 @@ export class HydroGateway implements Gateway {
         if(ids.length!==1){row.uid=0;errors.push(ids.length?'姓名对应多个账号，请指定 UID':'姓名未匹配到当前子域账号，请指定 UID');}
         else if(row.uid>0&&row.uid!==ids[0])errors.push('姓名对应账号已变化，请重新预览');else row.uid=ids[0];
       }
-      if(row.problemFolder&&!row.manualProblem){const matches=problemAliases.get(row.problemFolder.toLowerCase())||[];if(matches.length!==1){row.problem='';errors.push(matches.length?'题目英文名不唯一，请指定题目':'题目英文名未匹配，请指定题目');}else{row.problem=String(matches[0]);if('pid'in original&&original.pid&&original.pid!==matches[0])errors.push('题目匹配已变化，请重新预览');}}
+      if(row.problemFolder&&!row.manualProblem){const mapped=configuredNames.get(row.problemFolder.toLowerCase());const matches=mapped?[mapped]:problemAliases.get(row.problemFolder.toLowerCase())||[];if(matches.length!==1){row.problem='';errors.push(matches.length?'题目英文名不唯一，请指定题目':'题目英文名未匹配，请指定题目');}else{row.problem=String(matches[0]);if('pid'in original&&original.pid&&original.pid!==matches[0])errors.push('题目匹配已变化，请重新预览');}}
 
       if(row.excluded){result.push({...row,pid:0,username:row.contestantName||`UID ${row.uid}`,errors:[],rid:new ObjectId()});continue;}
       const u = await this.db.collection('user').findOne({ _id: row.uid as any }, { projection: { _id: 1, uname: 1, priv: 1 } });

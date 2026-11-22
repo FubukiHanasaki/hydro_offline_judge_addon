@@ -1,0 +1,14 @@
+{% extends offlineEditBaseTemplate %}
+{% block content %}
+{{ super() }}
+<link rel="stylesheet" href="/offline-judge/panel.css?v=contest-settings-20261122">
+<section class="section" id="offline-contest-settings" data-api="{{ offlineSettingsApi }}" hidden>
+  <div class="section__header"><h2 class="section__title">代码包与比赛 IO</h2></div>
+  <div class="section__body">
+    <div id="offline-settings-notice" role="status" hidden></div>
+    <div class="oj-settings-table-wrap"><table class="oj-settings-table"><thead><tr><th>比赛题目</th><th>题目英文名</th><th>输入输出</th><th>文件名</th></tr></thead><tbody id="offline-settings-rows"></tbody></table></div>
+    <button type="button" id="offline-settings-save" class="rounded primary button">保存代码包与 IO 设置</button>
+  </div>
+</section>
+<script defer src="/offline-judge/contest-settings.js?v=20261122"></script>
+{% endblock %}
