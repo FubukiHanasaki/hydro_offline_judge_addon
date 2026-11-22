@@ -184,6 +184,8 @@ export async function apply(ctx: Context) {
     h.response.addHeader('Cache-Control', 'private, no-store');
     h.response.addHeader('Vary', 'Cookie, Authorization');
     Object.assign(h.response.body, {
+      // Template wrappers must retain Hydro's title, controller and navigation identity.
+      page_name: 'contest_detail',
       offlineBaseTemplate: h.response.template,
       offlineApi: h.url('offline_judge_contests'),
       offlineBatchBase: h.url('offline_judge_batch', { id: '000000000000000000000000' }).replace(/\/0{24}$/, ''),
